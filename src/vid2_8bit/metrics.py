@@ -106,7 +106,15 @@ class VideoMetrics:
 
 
 def report_video(path: str | Path, max_frames: int = 60) -> VideoMetrics:
-    """Measure a rendered video."""
+    """Measure a rendered video file.
+
+    Only meaningful on a **losslessly encoded** file. Lossy codecs perturb
+    pixel values slightly everywhere, so the exact-colour index map differs in
+    almost every pixel every frame and churn pins near 100% regardless of how
+    stable the render is. To measure a lossy output, prefer the metrics that
+    `Converter` accumulates from index maps during rendering
+    (`Stats.noise` / `Stats.churn`), which are exact and cost nothing.
+    """
     noise_vals: list[float] = []
     churn_vals: list[float] = []
     prev: np.ndarray | None = None

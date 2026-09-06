@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 
 from .assist import NULL_CACHE, AssistCache
+from .metrics import isolated_pixel_ratio, temporal_churn
 from .color import dither as dither_mod
 from .color import palette as palette_mod
 from .color import tiles as tiles_mod
@@ -68,6 +69,17 @@ class Stats:
     seconds: float = 0.0
     shots: int = 0
     palette_sizes: list[int] = field(default_factory=list)
+    # Quality metrics accumulated from palette index maps.
+    noise_samples: list[float] = field(default_factory=list)
+    churn_samples: list[float] = field(default_factory=list)
+
+    @property
+    def noise(self) -> float:
+        return float(np.mean(self.noise_samples)) if self.noise_samples else 0.0
+
+    @property
+    def churn(self) -> float:
+        return float(np.mean(self.churn_samples)) if self.churn_samples else 0.0
 
     def report(self) -> str:
         fps = self.frames / self.seconds if self.seconds > 0 else 0.0
@@ -76,20 +88,36 @@ class Stats:
             if self.palette_sizes
             else "n/a"
         )
-        return (
+        line = (
             f"{self.frames} frames in {self.seconds:.1f}s ({fps:.2f} fps), "
             f"{self.shots} shot(s), palette {pal} colors"
         )
+        if self.noise_samples:
+            line += (
+                f"\nspatial noise {self.noise * 100:.2f}%  |  "
+                f"temporal churn {self.churn * 100:.2f}%"
+            )
+        return line
 
 
 class Converter:
     """Converts a video (or a single frame) to pixel art."""
 
-    def __init__(self, cfg: Config, assist: AssistCache | None = None):
+    def __init__(
+        self,
+        cfg: Config,
+        assist: AssistCache | None = None,
+        collect_metrics: bool = True,
+    ):
         cfg.validate()
         self.cfg = cfg
         self.assist = assist or NULL_CACHE
         self.stats = Stats()
+        # Metrics are gathered from index maps here rather than by re-reading
+        # the encoded file. Video compression perturbs pixel values, so a churn
+        # measured on an h.264 output reports ~98% no matter how stable the
+        # render actually is -- it is measuring the codec, not the pipeline.
+        self.collect_metrics = collect_metrics
 
     # -- palette -----------------------------------------------------------
 
@@ -181,6 +209,11 @@ class Converter:
 
         # Stage 4 -- dither then quantize.
         idx = self._quantize(logical, state, offset)
+        if self.collect_metrics:
+            self.stats.noise_samples.append(isolated_pixel_ratio(idx))
+            prev = state.temporal.prev_idx
+            if prev is not None and prev.shape == idx.shape:
+                self.stats.churn_samples.append(temporal_churn(prev, idx))
         state.temporal.note_indices(idx)
         out = state.quantizer.to_rgb(idx)
 
