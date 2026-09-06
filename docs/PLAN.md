@@ -188,12 +188,17 @@ vid2-8bit/
   double-serves as the shader host for the M6 fast tier.
 - **onnxruntime-directml** for the assist modules.
 
-### Hardware note
-The RX 6700M is RDNA2. ROCm-on-Windows is preview-only for RX 7000/9000 series, so there is no
-practical local PyTorch-CUDA path. Assist models run through ONNX Runtime + DirectML, with CPU
-fallback (Depth Anything V2 Small is tolerable on CPU at reduced resolution). Verify DirectML
-actually accelerates the chosen models before depending on it — treat the assist path as optional
-throughout, which the `graceful no-op` design already enforces.
+### Hardware note (corrected during implementation)
+An earlier draft of this plan stated there was no practical local PyTorch path on this machine.
+That was wrong. A working ROCm PyTorch lives inside the ComfyUI install at
+`.../PROGRAMMING/comfyui-rocm/python_env/python.exe`: torch 2.12.0+rocm7.14.0a, HIP 7.14,
+`torch.cuda.is_available() == True`, device `AMD Radeon RX 6700M` (gfx1031, 9.98 GB). ComfyUI
+itself is available to host the parked generative approaches.
+
+Note gfx1031 is flagged `IS_LEGACY_GPU` by ComfyUI's launcher, so measure rather than assume GPU
+speedups. The assist path stays optional regardless -- the graceful no-op design enforces it -- and
+a second PyTorch environment on Linux is the preferred host for heavy neural work. See the compute
+topology section of README.md.
 
 ---
 

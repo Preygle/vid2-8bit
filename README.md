@@ -10,18 +10,50 @@ Not a "pixelate" filter. See [Why naive pixelation fails](#why-naive-pixelation-
 
 ## Status
 
-Early. `M0` scaffolding in progress. See [`docs/PLAN.md`](docs/PLAN.md) for the full design and
-build order.
+Working end to end. `convert`, `frame`, `contact-sheet`, `preview`, `presets` and `metrics` all
+run; 55 tests pass. See [`docs/PLAN.md`](docs/PLAN.md) for the full design.
 
 | Milestone | Scope | State |
 |---|---|---|
-| M0 | ffmpeg IO, config/presets, naive pipeline, A/B contact-sheet harness | 🚧 in progress |
-| M1 | Pre-abstraction + Oklab per-shot palette | ☐ |
-| M2 | Temporal stabilization | ☐ |
-| M3 | Structure extraction + outline expansion | ☐ |
-| M4 | Presets, tile constraints, dithering, bit-depth snap | ☐ |
-| M5 | Preview GUI | ☐ |
-| M6 | Neural assists, GLSL fast tier, superpixel quality tier | ☐ |
+| M0 | ffmpeg IO, config/presets, pipeline, A/B contact-sheet harness | Done |
+| M1 | L0 pre-abstraction + Oklab per-shot palette | Done |
+| M2 | Temporal stabilization | Done |
+| M3 | Structure extraction + outline expansion | Done |
+| M4 | 10 presets, tile constraints, dithering, bit-depth snap | Done |
+| M5 | Preview GUI (OpenCV highgui, live sliders) | Done |
+| M6 | Neural assists, GLSL fast tier, Gerstner superpixel tier | Not started |
+
+### Measured results
+
+On the synthetic test clip (`python tools/make_testclip.py`), measured on palette index maps
+during rendering rather than on the encoded file:
+
+**Spatial noise** — isolated single-pixel outliers, the salt-and-pepper artifact, on a panning shot:
+
+| Configuration | noise | churn |
+|---|---|---|
+| Naive (`downsample → quantize`) | 5.65% | 32.3% |
+| + L0 abstraction | 5.11% | 35.0% |
+| + abstraction and temporal | **2.73%** | **25.2%** |
+
+**Temporal stability** — a locked-off shot with realistic sensor grain, which is what actually
+causes boiling:
+
+| Configuration | noise | churn |
+|---|---|---|
+| Naive, no temporal | 5.30% | 1.66% |
+| + L0 abstraction | 4.10% | 1.31% |
+| + index hysteresis | 4.07% | **0.01%** |
+| + full temporal stack | 4.07% | 0.02% |
+
+Index hysteresis is the decisive mechanism for flicker: it cuts churn by more than 100x, because
+it stops pixels sitting near a palette boundary from flipping between two colours every frame.
+
+> **Caveat on the noise metric:** it counts *every* isolated pixel, so it cannot distinguish
+> moire speckle from a deliberate 1-pixel outline or an ordered dither. Presets that use both
+> (like `tetris-movie`) score *worse* on it while looking better. Treat it as a regression gate
+> for a fixed configuration, not as a cross-preset quality score. Visual A/B via
+> `contact-sheet` remains the primary instrument.
 
 ---
 
@@ -48,6 +80,14 @@ So the pipeline is **abstract → restructure → sample → quantize → stabil
 sample-then-quantize. The abstraction and restructuring stages are where nearly all the quality
 lives.
 
+**One counter-intuitive result worth recording.** It seems principled to low-pass sub-cell detail
+*before* structure-texture separation - detail below the cell scale can only alias, so remove it
+first. Measured in isolation that looks like a huge win (isolated-pixel noise 5.2% → 0.2%). It is
+a trap: the blur turns building silhouettes into soft ramps, L0 then has no sharp edge to snap to,
+and it invents smooth curved region boundaries where a straight roofline belongs. A/B renders show
+buildings dissolving into haze while the metric improves. L0 runs first; the low-pass is an
+optional post-step, off by default. This is why `contact-sheet` exists.
+
 > **Framing:** the *Tetris* sequences were substantially hand-authored and rotoscoped by artists,
 > not made by an automatic filter. This targets the closest automatable approximation.
 
@@ -61,8 +101,8 @@ happens in **linear light**; all perceptual distance is measured in **Oklab**.
 | Stage | Module | Purpose |
 |---|---|---|
 | 0 Ingest | `io/decode.py`, `io/shots.py` | ffmpeg raw pipe → linear RGB; scene detection |
-| 1 Abstraction | `stages/abstract.py` | Structure–texture separation, Nyquist-matched edge-preserving low-pass, luminance flattening |
-| 2 Structure | `stages/structure.py` | XDoG lines, LSD grid snapping, depth-gated silhouette outlines |
+| 1 Abstraction | `stages/abstract.py` | L0 structure–texture separation, optional Nyquist low-pass, luminance banding |
+| 2 Structure | `stages/structure.py` | XDoG lines, axis-run snapping, depth-gated silhouette outlines |
 | 3 Sampling | `stages/sample.py` | Outline-expanded downsample to logical resolution |
 | 4 Quantize | `color/palette.py`, `quantize.py`, `dither.py`, `tiles.py` | Oklab palette, tile constraints, selective dithering |
 | 5 Temporal | `stages/temporal.py` | Fixed palette, grid anchoring, flow-guided filter, index hysteresis |
@@ -100,11 +140,12 @@ Core deps are CPU-only (`numpy`, `opencv-python`, `scipy`, `PyYAML`) and **ffmpe
 Optional extras:
 
 ```bash
-pip install -e ".[gui]"     # moderngl + glfw + imgui - preview GUI (M5)
 pip install -e ".[fast]"    # numba - JIT for palette assignment / tile solve
+pip install -e ".[gui]"     # moderngl + glfw - reserved for the future GLSL fast tier
 ```
 
-The neural assist modules are deliberately **not** installed into this environment. See below.
+The preview GUI needs **no extras** - it is built on OpenCV's highgui, which is already a core
+dependency. The neural assist modules are deliberately **not** installed here; see below.
 
 ---
 
@@ -227,17 +268,26 @@ sub-cell.
 ## Development
 
 ```bash
-python -m pytest                       # unit tests
-python tools/contact_sheet.py --help   # A/B harness - the main tuning instrument
-python tools/metrics.py --help         # noise + temporal-churn metrics
+python -m pytest                          # 55 unit tests
+python tools/make_testclip.py -o test.mp4 # synthetic clip exercising the hard cases
+python tools/contact_sheet.py --help      # A/B harness - the main tuning instrument
+python tools/derive_preset.py --help      # fit a preset to reference frames
+python tools/metrics.py --help            # measure an existing (lossless) render
 ```
 
-Two quantitative gates guard what is hard to eyeball:
+`tools/make_testclip.py` generates a scene built specifically to break naive pixelation: a facade
+window grid at the aliasing threshold, long straight architectural edges, a smooth sky gradient, a
+camera pan, and an independently moving car. Each targets a different failure mode.
 
-- **Noise metric** — count of isolated single-pixel palette outliers per frame. Should trend to ~0
-  on flat regions as Stage 1 improves.
-- **Temporal churn** — mean per-pixel palette-index change rate between frames. On a locked-off
-  shot it should approach 0; on a pan it should show clean stepped motion, not per-pixel churn.
+Two quantitative gates guard what is hard to eyeball, both printed by `convert`:
+
+- **Noise** — isolated single-pixel palette outliers per frame. See the caveat above.
+- **Temporal churn** — per-pixel palette-index change rate between frames. On a locked-off shot it
+  should approach 0.
+
+Both are computed from index maps during rendering. Do **not** measure them by re-reading a lossy
+output file: h.264 perturbs pixel values everywhere, which pins churn near 100% regardless of how
+stable the render is.
 
 ## License
 
