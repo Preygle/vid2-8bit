@@ -1,0 +1,18 @@
+description: Original Game Boy DMG - 4 shades of green, heavy ordered dithering.
+extends: base
+sample:
+  cell_size: 8
+palette:
+  mode: hardware
+  hardware: gameboy
+  size: 4
+abstract:
+  luma_bands: 4
+  saturation: 0.0
+dither:
+  mode: bayer4
+  amount: 0.9
+  selective_threshold: 0.0
+structure:
+  outline_strength: 0.9
+  outline_darken: 1.0

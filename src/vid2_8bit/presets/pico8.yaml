@@ -1,0 +1,13 @@
+description: PICO-8 - 16 curated colors, clean and graphic.
+extends: base
+sample:
+  cell_size: 6
+palette:
+  mode: hardware
+  hardware: pico8
+  size: 16
+abstract:
+  luma_bands: 4
+  saturation: 1.3
+dither:
+  mode: none

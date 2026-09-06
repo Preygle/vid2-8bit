@@ -1,0 +1,21 @@
+description: Neutral starting point; other presets extend this.
+tier: quality
+abstract:
+  enabled: true
+  texture_removal: 0.6
+  smooth_radius_cells: 0.0
+  edge_threshold: 0.09
+  luma_bands: 0
+  saturation: 1.15
+sample:
+  cell_size: 6
+  method: outline_expand
+structure:
+  outlines: true
+  outline_strength: 0.75
+temporal:
+  enabled: true
+  flow: dis
+  grid_anchor: true
+output:
+  pix_fmt: yuv444p

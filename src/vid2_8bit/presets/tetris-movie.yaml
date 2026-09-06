@@ -1,0 +1,39 @@
+description: >
+  Tetris (2023) film style - flat readable regions, strong dark silhouettes,
+  few shading bands, restrained dithering. Numbers here are a starting estimate;
+  run tools/derive_preset.py against frames in references/tetris/ to fit them.
+extends: base
+sample:
+  cell_size: 6
+  method: outline_expand
+  contrast_weight: 0.8
+palette:
+  mode: auto
+  size: 24
+  chroma_weight: 1.25
+abstract:
+  enabled: true
+  texture_removal: 0.35
+  smooth_radius_cells: 0.0
+  edge_threshold: 0.11
+  luma_bands: 5
+  saturation: 1.12
+structure:
+  outlines: true
+  outline_strength: 0.8
+  outline_darken: 0.55
+  snap_lines: true
+  depth_gated: true
+dither:
+  mode: bayer4
+  amount: 0.3
+  selective_threshold: 0.04
+temporal:
+  enabled: true
+  flow: dis
+  blend: 0.55
+  hysteresis: 0.02
+  grid_anchor: true
+  decimate_fps: 15.0
+output:
+  crt: false

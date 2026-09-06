@@ -1,0 +1,17 @@
+description: Modern indie pixel art - no hardware constraints, clean flat regions.
+extends: base
+sample:
+  cell_size: 4
+palette:
+  mode: auto
+  size: 48
+abstract:
+  luma_bands: 5
+  texture_removal: 0.7
+  saturation: 1.2
+dither:
+  mode: none
+structure:
+  outlines: true
+  outline_strength: 0.8
+  snap_lines: true

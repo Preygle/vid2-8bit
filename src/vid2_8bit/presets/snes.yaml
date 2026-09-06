@@ -1,0 +1,17 @@
+description: SNES era - finer cells, richer palette, 5-5-5 channel depth.
+extends: base
+sample:
+  cell_size: 4
+palette:
+  mode: auto
+  size: 64
+  bits_per_channel: [5, 5, 5]
+abstract:
+  luma_bands: 6
+  texture_removal: 0.5
+dither:
+  mode: bayer4
+  amount: 0.35
+  selective_threshold: 0.03
+structure:
+  outline_strength: 0.6

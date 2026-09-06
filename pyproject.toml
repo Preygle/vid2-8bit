@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vid2-8bit"
+version = "0.1.0"
+description = "Video to pixel-art converter with configurable palette, cell size and bit depth"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "opencv-python>=4.9",
+    "scipy>=1.11",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+gui = ["moderngl", "glfw", "imgui-bundle"]
+fast = ["numba"]
+assist = ["onnxruntime-directml"]
+
+[project.scripts]
+vid2-8bit = "vid2_8bit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+vid2_8bit = ["presets/*.yaml"]

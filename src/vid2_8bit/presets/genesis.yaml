@@ -1,0 +1,14 @@
+description: Mega Drive / Genesis - 3-3-3 channel depth, tighter palette, dithered gradients.
+extends: base
+sample:
+  cell_size: 4
+palette:
+  mode: auto
+  size: 48
+  bits_per_channel: [3, 3, 3]
+abstract:
+  luma_bands: 5
+dither:
+  mode: bayer4
+  amount: 0.6
+  selective_threshold: 0.02

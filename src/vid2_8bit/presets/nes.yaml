@@ -1,0 +1,20 @@
+description: NES / Famicom - 54-color master palette, 4 colors per 8x8 tile.
+extends: base
+sample:
+  cell_size: 7
+palette:
+  mode: hardware
+  hardware: nes
+  size: 25
+tiles:
+  enabled: true
+  tile_size: 8
+  colors_per_tile: 4
+  subpalettes: 4
+  shared_backdrop: true
+abstract:
+  luma_bands: 4
+  texture_removal: 0.75
+dither:
+  mode: bayer2
+  amount: 0.35

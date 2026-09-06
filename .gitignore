@@ -1,0 +1,32 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Media & derived artifacts
+references/*
+!references/.gitkeep
+!references/README.md
+out/
+cache/
+*.mp4
+*.mkv
+*.mov
+*.webm
+*.png
+*.jpg
+*.jpeg
+!docs/**/*.png
+
+# Model weights
+models/
+*.onnx
+*.pth
+*.safetensors
+
+# Local machine config
+config.local.yaml
+.env

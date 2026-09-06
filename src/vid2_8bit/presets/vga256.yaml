@@ -1,0 +1,16 @@
+description: VGA 256-color - literal 8-bit color depth, fine cells.
+extends: base
+sample:
+  cell_size: 3
+palette:
+  mode: auto
+  size: 256
+  bits_per_channel: [3, 3, 2]
+abstract:
+  luma_bands: 0
+  texture_removal: 0.4
+dither:
+  mode: bayer8
+  amount: 0.4
+structure:
+  outline_strength: 0.4

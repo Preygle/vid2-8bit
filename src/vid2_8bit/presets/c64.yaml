@@ -1,0 +1,16 @@
+description: Commodore 64 - 16 fixed colors, chunky cells, strong outlines.
+extends: base
+sample:
+  cell_size: 8
+palette:
+  mode: hardware
+  hardware: c64
+  size: 16
+abstract:
+  luma_bands: 3
+  texture_removal: 0.8
+dither:
+  mode: bayer4
+  amount: 0.5
+structure:
+  outline_darken: 0.8
