@@ -1,0 +1,14 @@
+description: 'Tuned for shot1: already pixel art: preserve, do not re-abstract'
+extends: tetris-movie
+palette:
+  size: 48
+  even_spacing: 0.25
+  despeckle: 0.0
+tone:
+  contrast: 0.15
+  levels_strength: 0.3
+  target_chroma: 0.0
+  saturation: 1.0
+sample:
+  target_width: 300
+  min_cell: 3.0

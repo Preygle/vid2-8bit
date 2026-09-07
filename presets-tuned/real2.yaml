@@ -1,0 +1,12 @@
+description: 'Tuned for real2: daylight close-up: commit the subject colour'
+extends: tetris-movie
+palette:
+  size: 32
+  even_spacing: 0.4
+  despeckle: 0.12
+tone:
+  contrast: 0.45
+  target_chroma: 0.05
+sample:
+  target_width: 170
+  min_cell: 4.0

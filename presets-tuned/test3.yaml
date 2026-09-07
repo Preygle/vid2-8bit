@@ -1,0 +1,13 @@
+description: 'Tuned for test3: vertical water: chaotic texture needs a coarse grid'
+extends: tetris-movie
+palette:
+  size: 20
+  even_spacing: 0.55
+  despeckle: 0.16
+tone:
+  contrast: 0.55
+sample:
+  target_width: 110
+  min_cell: 6.0
+temporal:
+  blend: 0.7

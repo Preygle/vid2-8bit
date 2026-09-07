@@ -1,0 +1,10 @@
+description: 'Tuned for real1: night exterior: keep it dark, lift structure'
+extends: tetris-movie
+palette:
+  size: 32
+  even_spacing: 0.45
+  despeckle: 0.1
+tone:
+  contrast: 0.65
+sample:
+  target_width: 180

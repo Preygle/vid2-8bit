@@ -1,0 +1,10 @@
+description: 'Tuned for test2: aerial landscape: natural colour, tame the rock noise'
+extends: tetris-movie
+palette:
+  size: 32
+  even_spacing: 0.45
+  despeckle: 0.14
+tone:
+  contrast: 0.45
+sample:
+  target_width: 160

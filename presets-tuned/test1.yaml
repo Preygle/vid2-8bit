@@ -1,0 +1,10 @@
+description: 'Tuned for test1: daylight cityscape'
+extends: tetris-movie
+palette:
+  size: 32
+  even_spacing: 0.45
+  despeckle: 0.1
+tone:
+  contrast: 0.5
+sample:
+  target_width: 180
