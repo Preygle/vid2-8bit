@@ -12,11 +12,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from vid2_8bit.color import dither, palette, spaces, tiles
+from vid2_8bit.color import despeckle, dither, palette, spaces, tiles
 from vid2_8bit.color.quantize import Quantizer, posterize_luma, snap_image_bit_depth
 from vid2_8bit.config import available_presets, build_config
 from vid2_8bit.metrics import isolated_pixel_ratio, temporal_churn
-from vid2_8bit.stages import abstract, output, sample, structure
+from vid2_8bit.stages import abstract, output, sample, structure, tone
 
 
 @pytest.fixture
@@ -362,6 +362,137 @@ class TestConfig:
         ):
             with pytest.raises(ValueError):
                 build_config(overrides=bad)
+
+
+
+class TestTone:
+    """Stage 0.5. Its absence was the single largest quality defect found."""
+
+    def test_auto_levels_expands_a_compressed_range(self):
+        """The failure that made every night shot render as a muddy blob."""
+        img = (np.random.default_rng(0).random((64, 64, 3)) * 0.2 + 0.15).astype(np.float32)
+        spread = lambda i: float(
+            np.percentile(spaces.srgb_to_oklab(i)[..., 0], 99)
+            - np.percentile(spaces.srgb_to_oklab(i)[..., 0], 1)
+        )
+        assert spread(tone.auto_levels(img)) > spread(img) * 1.4
+
+    def test_auto_levels_leaves_a_full_range_image_alone(self):
+        """Forcing the same stretch on daylight blew an orange car to white.
+
+        The fixture is built as a ramp in Oklab *lightness*, not uniform RGB:
+        uniform RGB only spans about 0.66 of the L range because lightness is
+        nonlinear, so it is not actually a full-range image and a lift on it is
+        correct behaviour.
+        """
+        L = np.linspace(0.02, 0.99, 64, dtype=np.float32)
+        lab = np.zeros((64, 64, 3), dtype=np.float32)
+        lab[..., 0] = L[:, None]
+        img = spaces.oklab_to_srgb(lab)
+        span = lambda i: float(
+            np.percentile(spaces.srgb_to_oklab(i)[..., 0], 99)
+            - np.percentile(spaces.srgb_to_oklab(i)[..., 0], 1)
+        )
+        assert span(img) > 0.9, "fixture must actually span the range"
+        assert np.abs(tone.auto_levels(img) - img).max() < 0.05
+
+    def test_two_pole_contrast_increases_spread(self):
+        img = (np.random.default_rng(1).random((48, 48, 3)) * 0.4 + 0.3).astype(np.float32)
+        out = tone.two_pole_contrast(img, 1.0)
+        assert spaces.srgb_to_oklab(out)[..., 0].std() > spaces.srgb_to_oklab(img)[..., 0].std()
+
+    def test_contrast_zero_is_a_passthrough(self):
+        img = np.random.default_rng(3).random((16, 16, 3)).astype(np.float32)
+        assert np.array_equal(tone.two_pole_contrast(img, 0.0), img)
+
+    def test_color_transfer_moves_toward_reference(self):
+        img = np.tile([0.2, 0.3, 0.6], (32, 32, 1)).astype(np.float32)
+        ref = np.tile([0.6, 0.3, 0.2], (32, 32, 1)).astype(np.float32)
+        mean, std = tone.image_stats(ref)
+        out = tone.color_transfer(img, mean, std, 1.0)
+        before = np.abs(spaces.srgb_to_oklab(img).mean((0, 1)) - mean).sum()
+        after = np.abs(spaces.srgb_to_oklab(out).mean((0, 1)) - mean).sum()
+        assert after < before
+
+
+class TestPaletteRamp:
+    def test_hue_takes_the_short_arc(self):
+        """Linear degree interpolation puts a cyan band in a warm ramp."""
+        pal = palette.ramp_palette(12, shadow_hue=210, mid_hue=350, highlight_hue=45)
+        lab = spaces.srgb_to_oklab(pal)
+        hue = (np.degrees(np.arctan2(lab[:, 2], lab[:, 1])) + 360) % 360
+        # The upper half must not detour through green (roughly 90-180 deg).
+        assert not ((hue[6:] > 90) & (hue[6:] < 180)).any()
+
+    def test_lightness_is_evenly_spaced_and_monotonic(self):
+        L = spaces.srgb_to_oklab(palette.ramp_palette(12))[:, 0]
+        gaps = np.diff(L)
+        assert np.all(gaps > 0)
+        assert gaps.std() < 0.02
+
+
+class TestPaletteRedistribution:
+    def test_entries_get_comparable_pixel_share(self):
+        """The 72%-on-one-colour collapse a blind critic measured."""
+        rng = np.random.default_rng(0)
+        src = np.clip(rng.normal(0.16, 0.04, 60000), 0, 1).astype(np.float32)
+        pal = np.linspace(0.05, 0.95, 16, dtype=np.float32)[:, None].repeat(3, 1)
+        out = palette.redistribute_lightness(pal, src, 1.0, anchor_ink=True)
+        L = spaces.srgb_to_oklab(out)[:, 0]
+        share = np.bincount(
+            np.abs(src[:, None] - L[None, :]).argmin(1), minlength=16
+        ) / len(src)
+        assert share.max() < 0.30
+
+    def test_order_is_preserved(self):
+        rng = np.random.default_rng(2)
+        L = spaces.srgb_to_oklab(
+            palette.redistribute_lightness(
+                rng.random((12, 3)).astype(np.float32),
+                rng.random(5000).astype(np.float32), 1.0,
+            )
+        )[:, 0]
+        assert np.all(np.diff(L) >= -1e-4)
+
+    def test_warm_highlights_raises_chroma_at_the_top(self):
+        pal = np.linspace(0.05, 0.95, 8, dtype=np.float32)[:, None].repeat(3, 1)
+        chroma = lambda p: np.hypot(
+            spaces.srgb_to_oklab(p)[:, 1], spaces.srgb_to_oklab(p)[:, 2]
+        )
+        assert chroma(palette.warm_highlights(pal, 0.5))[-1] > chroma(pal)[-1]
+
+
+class TestDespeckle:
+    @staticmethod
+    def _pal():
+        pal = np.linspace(0, 1, 8, dtype=np.float32)[:, None].repeat(3, 1)
+        return pal, spaces.srgb_to_oklab(pal)
+
+    def test_removes_low_contrast_island(self):
+        _, lab = self._pal()
+        idx = np.full((9, 9), 2, np.int32)
+        idx[4, 4] = 3
+        assert despeckle.despeckle_indices(idx, lab, 0.15)[4, 4] == 2
+
+    def test_keeps_high_contrast_island(self):
+        """Lit windows are isolated cells too and must survive."""
+        _, lab = self._pal()
+        idx = np.full((9, 9), 2, np.int32)
+        idx[4, 4] = 7
+        assert despeckle.despeckle_indices(idx, lab, 0.15)[4, 4] == 7
+
+    def test_keeps_run_ends(self):
+        """min_neighbours=7 ate run ends, shortening architectural lines."""
+        _, lab = self._pal()
+        idx = np.full((9, 9), 2, np.int32)
+        idx[4, 2:7] = 3
+        assert (despeckle.despeckle_indices(idx, lab, 0.9)[4, 2:7] == 3).all()
+
+    def test_zero_threshold_is_a_passthrough(self):
+        _, lab = self._pal()
+        idx = np.full((9, 9), 2, np.int32)
+        idx[4, 4] = 5
+        assert np.array_equal(despeckle.despeckle_indices(idx, lab, 0.0), idx)
 
 
 # -- metrics ---------------------------------------------------------------
