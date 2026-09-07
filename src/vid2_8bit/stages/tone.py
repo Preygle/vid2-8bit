@@ -184,6 +184,7 @@ def apply_tone(img_srgb: np.ndarray, cfg) -> np.ndarray:
         or tcfg.contrast > 0.0
         or (tcfg.reference and tcfg.transfer_strength > 0.0)
         or abs(tcfg.saturation - 1.0) > 1e-3
+        or tcfg.target_chroma > 0.0
     )
     if not needs:
         return img_srgb
@@ -201,10 +202,33 @@ def apply_tone(img_srgb: np.ndarray, cfg) -> np.ndarray:
     if tcfg.reference and tcfg.transfer_strength > 0.0:
         mean, std = reference_stats(tcfg.reference)
         _transfer_in_place(lab, mean, std, tcfg.transfer_strength)
-    if abs(tcfg.saturation - 1.0) > 1e-3:
-        lab[..., 1:] *= np.float32(tcfg.saturation)
-
+    _saturate_in_place(lab, tcfg.saturation, tcfg.target_chroma, tcfg.max_chroma_boost)
     return oklab_to_srgb(lab)
+
+
+def _saturate_in_place(lab, saturation: float, target_chroma: float,
+                       max_boost: float) -> None:
+    """Chroma adjustment, target-seeking when `target_chroma` is set.
+
+    A fixed multiplier does not generalise, for the same reason a fixed levels
+    stretch does not. The film roughly doubles the saturation of muted footage
+    -- a washed-out orange car becomes vivid orange -- but applying the same 1.9x
+    to already-vivid aerial footage turned a blue sea into electric cyan.
+
+    Seeking a target mean chroma instead adapts to the source: muted input gets
+    the full boost, saturated input gets little or none. `max_boost` bounds it so
+    a near-monochrome frame is not amplified into false colour.
+    """
+    if target_chroma > 0.0:
+        chroma = np.hypot(lab[..., 1], lab[..., 2])
+        current = float(chroma.mean())
+        if current > 1e-5:
+            factor = float(np.clip(target_chroma / current,
+                                   1.0 / max(max_boost, 1.0), max(max_boost, 1.0)))
+            lab[..., 1:] *= np.float32(factor * saturation)
+        return
+    if abs(saturation - 1.0) > 1e-3:
+        lab[..., 1:] *= np.float32(saturation)
 
 
 def palette_from_reference(path: str | Path, size: int, chroma_weight: float = 1.0):

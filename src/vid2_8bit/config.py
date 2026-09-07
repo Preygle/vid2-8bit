@@ -40,6 +40,12 @@ class ToneConfig:
     white_point: float = 99.0
     gamma: float = 1.0
     saturation: float = 1.0
+    # Seek this mean Oklab chroma instead of multiplying blindly. Measured at
+    # about 0.042 across the film reference frames. 0 disables and `saturation`
+    # acts as a plain multiplier. Adapts to the source: muted footage gets the
+    # full boost, already-vivid footage gets little.
+    target_chroma: float = 0.0
+    max_chroma_boost: float = 2.5
     # Ceiling on the auto-levels lift. The applied amount scales down when the
     # source already uses most of the range, so daylight shots are not blown out.
     levels_strength: float = 1.0
@@ -98,6 +104,11 @@ class SampleConfig:
     # Exactly one of cell_size / target_width drives the grid.
     cell_size: int | None = 6
     target_width: int | None = None
+    # Floor on source-pixels-per-output-pixel. A fixed target_width is the right
+    # model for HD footage but breaks on small sources: 180 logical px from a
+    # 360px-wide clip is a cell of 2, which barely reads as pixel art at all.
+    # This caps the grid so low-resolution input still looks deliberate.
+    min_cell: float = 0.0
     # area | median | outline_expand | superpixel
     method: str = "outline_expand"
     # Outline-expansion window as a multiple of cell size (PixelOE-style).
@@ -249,6 +260,8 @@ class Config:
         """Logical (pixel-art) resolution for a given source resolution."""
         if self.sample.target_width:
             w = int(self.sample.target_width)
+            if self.sample.min_cell > 0:
+                w = max(8, min(w, int(src_w / float(self.sample.min_cell))))
             h = max(1, int(round(src_h * w / src_w)))
         else:
             cell = max(1, int(self.sample.cell_size or 6))

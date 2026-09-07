@@ -528,7 +528,16 @@ class Converter:
         """Convert a standalone still image."""
         h, w = img_u8.shape[:2]
         cell = self.cfg.effective_cell(w, h)
-        pixels = u8_to_float(img_u8).reshape(-1, 3)
+
+        # Fit the palette to TONED, ABSTRACTED pixels -- the same thing the
+        # renderer will actually quantize, and the same thing convert() does via
+        # _sample_pixels. Fitting to raw pixels instead gave stills a palette
+        # built from the ungraded source, so a saturation boost in the tone
+        # stage was immediately quantized back out and single-image renders
+        # silently disagreed with video export.
+        toned = tone_mod.apply_tone(u8_to_float(img_u8), self.cfg)
+        toned = abstract_mod.abstract_frame(toned, self.cfg, cell, tier=self.cfg.tier)
+        pixels = toned.reshape(-1, 3)
         rng = np.random.default_rng(0)
         n = min(self.cfg.palette.sample_pixels, len(pixels))
         sub = pixels[rng.choice(len(pixels), size=n, replace=False)]

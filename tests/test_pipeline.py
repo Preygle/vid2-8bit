@@ -495,6 +495,53 @@ class TestDespeckle:
         assert np.array_equal(despeckle.despeckle_indices(idx, lab, 0.0), idx)
 
 
+class TestGeneralisation:
+    """Settings must hold across very different footage, not just one clip."""
+
+    def test_min_cell_caps_the_grid_on_small_sources(self):
+        """180 logical px from a 360px clip is a cell of 2 - barely pixelated."""
+        cfg = build_config(overrides={
+            "sample": {"cell_size": None, "target_width": 180, "min_cell": 4.0}
+        })
+        assert cfg.effective_cell(1920, 1080) > 10      # HD unaffected
+        assert cfg.effective_cell(360, 640) == pytest.approx(4.0, abs=0.2)
+
+    def test_min_cell_never_collapses_the_grid(self):
+        cfg = build_config(overrides={
+            "sample": {"cell_size": None, "target_width": 180, "min_cell": 999.0}
+        })
+        w, _ = cfg.logical_size(360, 640)
+        assert w >= 8
+
+    def test_target_chroma_boosts_muted_and_tames_vivid(self):
+        """A fixed multiplier over-saturates footage that is already vivid."""
+        from vid2_8bit.stages.tone import _saturate_in_place
+
+        def mean_chroma(lab):
+            return float(np.hypot(lab[..., 1], lab[..., 2]).mean())
+
+        muted = np.zeros((32, 32, 3), dtype=np.float32)
+        muted[..., 0] = 0.5
+        muted[..., 1] = 0.01
+        vivid = muted.copy()
+        vivid[..., 1] = 0.12
+
+        _saturate_in_place(muted, 1.0, 0.04, 2.5)
+        _saturate_in_place(vivid, 1.0, 0.04, 2.5)
+        assert mean_chroma(muted) > 0.02          # lifted toward target
+        assert mean_chroma(vivid) < 0.06          # pulled down toward target
+
+    def test_target_chroma_respects_the_boost_ceiling(self):
+        """A near-monochrome frame must not be amplified into false colour."""
+        from vid2_8bit.stages.tone import _saturate_in_place
+
+        grey = np.zeros((16, 16, 3), dtype=np.float32)
+        grey[..., 0] = 0.5
+        grey[..., 1] = 0.001
+        _saturate_in_place(grey, 1.0, 0.04, 2.5)
+        assert float(np.abs(grey[..., 1]).mean()) <= 0.001 * 2.5 + 1e-6
+
+
 class TestPerformance:
     def test_prescale_reduces_resolution_but_not_output_size(self):
         """Output size must not depend on the speed setting."""

@@ -27,7 +27,10 @@ tone:
   gamma: 1.0
   # Two-pole S-curve: ink shadows, lifted highlights, little in between.
   contrast: 0.9
-  saturation: 1.2
+  saturation: 1.0
+  # Measured mean chroma of the film reference frames.
+  target_chroma: 0.042
+  max_chroma_boost: 2.5
   # Point `reference` at a style frame to adopt its grade. Left unset here so
   # the preset works on any footage; the CLI/web UI can supply one.
   reference: null
@@ -37,6 +40,9 @@ sample:
   cell_size: null
   # The film sits near 180 logical px wide. Far coarser than it looks.
   target_width: 180
+  # Keeps small or vertical sources from rendering at a cell of 2, which reads
+  # as a mild blur rather than as pixel art.
+  min_cell: 4.0
   method: outline_expand
   contrast_weight: 1.0
   expand_radius: 1.0
