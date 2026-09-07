@@ -46,13 +46,23 @@ def median_downsample(img: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     """
     w_out, h_out = size
     h, w = img.shape[:2]
-    ph, pw = (-h) % h_out, (-w) % w_out
-    if ph or pw:
-        img = np.pad(img, ((0, ph), (0, pw), (0, 0)), mode="edge")
-    bh, bw = img.shape[0] // h_out, img.shape[1] // w_out
-    if bh < 1 or bw < 1:
+    if h_out < 1 or w_out < 1 or h < h_out or w < w_out:
         return area_downsample(img, size)
-    blocks = img[: bh * h_out, : bw * w_out].reshape(h_out, bh, w_out, bw, 3)
+
+    # Resize to an EXACT multiple of the output grid before blocking.
+    #
+    # The obvious alternative -- pad up to a multiple and reshape -- fabricates
+    # content: np.pad(mode="edge") replicates the last row, and those copies then
+    # dominate the medians of the final rows. With a 608-row working image and a
+    # 101-row grid it padded 99 rows, and the bottom 13 logical rows of every
+    # frame came out as identical vertical streaks. Resizing costs one cheap
+    # INTER_AREA pass and every source pixel contributes exactly once.
+    bh = max(1, int(round(h / h_out)))
+    bw = max(1, int(round(w / w_out)))
+    th, tw = bh * h_out, bw * w_out
+    if (h, w) != (th, tw):
+        img = cv2.resize(img, (tw, th), interpolation=cv2.INTER_AREA)
+    blocks = img.reshape(h_out, bh, w_out, bw, 3)
     return np.median(blocks, axis=(1, 3)).astype(np.float32)
 
 

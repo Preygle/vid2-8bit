@@ -366,7 +366,25 @@ def build_config(
         cfg.preset_name = preset
     if user_yaml:
         with Path(user_yaml).open("r", encoding="utf-8") as fh:
-            _merge_into(cfg, yaml.safe_load(fh) or {})
+            data = yaml.safe_load(fh) or {}
+        # A user file may use the same `extends`/`description` header as a
+        # built-in preset. Without this, a config saved by the tuning tools or
+        # exported from the web UI fails to load with "unknown config key".
+        parent = data.pop("extends", None)
+        data.pop("description", None)
+        if parent:
+            chain = [load_preset_dict(parent)]
+            seen = {parent}
+            while "extends" in chain[-1]:
+                nxt = chain[-1].pop("extends")
+                if nxt in seen:
+                    raise ValueError(f"circular preset inheritance at {nxt!r}")
+                seen.add(nxt)
+                chain.append(load_preset_dict(nxt))
+            for layer in reversed(chain):
+                _merge_into(cfg, {k: v for k, v in layer.items()
+                                  if k not in ("description", "extends")})
+        _merge_into(cfg, data)
     if overrides:
         _merge_into(cfg, overrides)
     cfg.validate()

@@ -304,6 +304,36 @@ class TestStages:
         expanded = sample.sample_frame(img, cfg, (10, 10), tier="fast")
         assert expanded.min() < plain.min()
 
+    def test_downsample_does_not_replicate_edge_rows(self):
+        """Edge padding fabricated 13 duplicate rows at the bottom of every frame.
+
+        A 608-row working image onto a 101-row grid padded 99 replicated rows,
+        which then dominated the medians of the final logical rows and rendered
+        the bottom 13% of the picture as identical vertical streaks.
+        """
+        rng = np.random.default_rng(0)
+        img = rng.random((608, 1080, 3)).astype(np.float32)
+        out = sample.median_downsample(img, (180, 101))
+        assert out.shape[:2] == (101, 180)
+        row_diff = np.abs(np.diff(out, axis=0)).mean(axis=(1, 2))
+        assert (row_diff[-15:] < 1e-6).sum() == 0
+
+    def test_maxpool_does_not_replicate_edge_rows(self):
+        from vid2_8bit.pipeline import maxpool_to
+
+        rng = np.random.default_rng(1)
+        mask = rng.random((608, 1080)).astype(np.float32)
+        out = maxpool_to(mask, (180, 101))
+        assert out.shape == (101, 180)
+        assert (np.abs(np.diff(out, axis=0)).mean(axis=1)[-15:] < 1e-6).sum() == 0
+
+    def test_downsample_uses_the_whole_frame(self):
+        """The bottom of the source must reach the bottom of the output."""
+        img = np.zeros((600, 900, 3), dtype=np.float32)
+        img[-30:] = 1.0                       # bright band only at the very bottom
+        out = sample.median_downsample(img, (90, 60))
+        assert out[-1].mean() > 0.5
+
     def test_integer_scale_and_upscale(self):
         assert output.integer_scale(213, 120, 1280, 720) == 6
         img = np.zeros((10, 20, 3), dtype=np.float32)

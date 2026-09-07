@@ -48,15 +48,16 @@ def maxpool_to(mask: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     """
     w_out, h_out = size
     h, w = mask.shape
-    # Pad up to an exact multiple so the reshape trick is valid.
-    ph, pw = (-h) % h_out, (-w) % w_out
-    if ph or pw:
-        mask = np.pad(mask, ((0, ph), (0, pw)), mode="edge")
-    bh, bw = mask.shape[0] // h_out, mask.shape[1] // w_out
-    if bh < 1 or bw < 1:
+    if h < h_out or w < w_out:
         return cv2.resize(mask, size, interpolation=cv2.INTER_LINEAR)
-    trimmed = mask[: bh * h_out, : bw * w_out]
-    return trimmed.reshape(h_out, bh, w_out, bw).max(axis=(1, 3)).astype(np.float32)
+    # Resize to an exact multiple rather than edge-padding: padding replicates
+    # the last row into the final blocks and smears the bottom of the frame.
+    bh = max(1, int(round(h / h_out)))
+    bw = max(1, int(round(w / w_out)))
+    th, tw = bh * h_out, bw * w_out
+    if (h, w) != (th, tw):
+        mask = cv2.resize(mask, (tw, th), interpolation=cv2.INTER_LINEAR)
+    return mask.reshape(h_out, bh, w_out, bw).max(axis=(1, 3)).astype(np.float32)
 
 
 @dataclass
