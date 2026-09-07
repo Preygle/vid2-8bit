@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vid2-8bit</title>
+<style>
+  :root{
+    --bg:#14161a; --panel:#1c1f26; --panel2:#232733; --line:#2f3542;
+    --text:#e6e9ef; --dim:#98a0b3; --accent:#6ea8fe; --good:#7ddb9a; --bad:#ff8080;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:13px/1.5 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:10px 16px;
+         background:var(--panel);border-bottom:1px solid var(--line);
+         position:sticky;top:0;z-index:10;flex-wrap:wrap}
+  header h1{font-size:15px;margin:0;letter-spacing:.4px}
+  header h1 b{color:var(--accent)}
+  .grow{flex:1}
+  .layout{display:grid;grid-template-columns:340px 1fr;gap:0;min-height:calc(100vh - 47px)}
+  @media(max-width:900px){.layout{grid-template-columns:1fr}}
+  aside{background:var(--panel);border-right:1px solid var(--line);
+        padding:12px;overflow-y:auto;max-height:calc(100vh - 47px)}
+  main{padding:16px;overflow:auto}
+  fieldset{border:1px solid var(--line);border-radius:8px;margin:0 0 12px;padding:10px 12px 12px;
+           background:var(--panel2)}
+  legend{color:var(--accent);font-weight:600;font-size:11px;letter-spacing:.9px;
+         text-transform:uppercase;padding:0 5px}
+  label{display:block;margin:9px 0 3px;color:var(--dim);font-size:11.5px}
+  .row{display:flex;align-items:center;gap:8px}
+  .row input[type=range]{flex:1;accent-color:var(--accent)}
+  .val{min-width:46px;text-align:right;font-variant-numeric:tabular-nums;
+       color:var(--text);font-size:11.5px}
+  input[type=text],select,input[type=number]{width:100%;background:#11131a;color:var(--text);
+       border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12.5px}
+  input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px}
+  .check{display:flex;align-items:center;gap:7px;margin:8px 0}
+  .check label{margin:0;color:var(--text);font-size:12.5px}
+  button{background:var(--accent);color:#0b1220;border:0;border-radius:6px;
+         padding:7px 13px;font-weight:600;cursor:pointer;font-size:12.5px}
+  button:hover{filter:brightness(1.12)}
+  button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .views{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:1100px){.views{grid-template-columns:1fr}}
+  .view{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px}
+  .view h2{margin:0 0 8px;font-size:11px;letter-spacing:.9px;text-transform:uppercase;
+           color:var(--dim);font-weight:600}
+  .view img{width:100%;display:block;border-radius:5px;background:#0b0d11;
+            image-rendering:pixelated}
+  .stats{display:flex;gap:14px;flex-wrap:wrap;color:var(--dim);font-size:11.5px;
+         margin-top:9px;font-variant-numeric:tabular-nums}
+  .stats b{color:var(--text);font-weight:600}
+  .swatches{display:flex;flex-wrap:wrap;gap:3px;margin-top:9px}
+  .sw{width:17px;height:17px;border-radius:3px;border:1px solid #0006}
+  #msg{padding:8px 11px;border-radius:6px;margin-bottom:12px;display:none;font-size:12.5px}
+  #msg.err{display:block;background:#3a1c1c;color:var(--bad);border:1px solid #5c2b2b}
+  #msg.ok{display:block;background:#1b3326;color:var(--good);border:1px solid #2c5540}
+  .bar{height:5px;background:#11131a;border-radius:3px;overflow:hidden;margin-top:7px}
+  .bar>i{display:block;height:100%;background:var(--accent);width:0;transition:width .2s}
+  pre{background:#0b0d11;border:1px solid var(--line);border-radius:6px;padding:11px;
+      overflow:auto;font-size:11.5px;max-height:340px;color:#c8d0e0}
+  .spin{width:13px;height:13px;border:2px solid #ffffff40;border-top-color:var(--accent);
+        border-radius:50%;display:inline-block;animation:sp .7s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .hint{color:var(--dim);font-size:11px;margin-top:4px}
+</style>
+</head>
+<body>
+<header>
+  <h1>vid2&#8209;8bit <b>&#9632;</b></h1>
+  <span class="grow"></span>
+  <span id="live" style="color:var(--dim);font-size:11.5px"></span>
+  <button class="ghost" id="btnYaml">Export preset</button>
+  <button id="btnConvert">Render full video</button>
+</header>
+
+<div class="layout">
+<aside>
+  <fieldset>
+    <legend>Source</legend>
+    <label>File path (video or image)</label>
+    <input type="text" id="source" placeholder="C:\path\to\clip.mp4">
+    <div class="hint" id="srcInfo">Enter a path, then press Load.</div>
+    <div class="btns"><button class="ghost" id="btnLoad">Load</button></div>
+    <label>Frame</label>
+    <div class="row">
+      <input type="range" id="frame" min="0" max="0" value="0" step="1">
+      <span class="val" id="frameV">0</span>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Preset</legend>
+    <select id="preset"></select>
+    <div class="hint" id="presetDesc"></div>
+    <div class="btns"><button class="ghost" id="btnApply">Apply preset</button></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Size &amp; sampling</legend>
+    <label>Cell size &mdash; source pixels per output pixel</label>
+    <div class="row"><input type="range" id="cell_size" min="1" max="24" value="6"><span class="val" id="cell_sizeV">6</span></div>
+    <label>Sampling method</label>
+    <select id="sample_method">
+      <option value="outline_expand">outline_expand &ndash; keeps thin lines</option>
+      <option value="area">area &ndash; plain average</option>
+      <option value="superpixel">superpixel &ndash; slow, best edges</option>
+    </select>
+    <label>Contrast weight</label>
+    <div class="row"><input type="range" id="contrast_weight" min="0" max="100" value="70"><span class="val" id="contrast_weightV">0.70</span></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Palette</legend>
+    <label>Mode</label>
+    <select id="palette_mode">
+      <option value="auto">auto &ndash; fitted to footage</option>
+      <option value="hardware">hardware &ndash; real console palette</option>
+    </select>
+    <div id="hwWrap" style="display:none">
+      <label>Hardware palette</label>
+      <select id="hardware_palette">
+        <option>nes</option><option>gameboy</option><option>c64</option>
+        <option>pico8</option><option>cga</option><option>mastersystem</option>
+        <option>amiga</option>
+      </select>
+    </div>
+    <label>Palette size</label>
+    <div class="row"><input type="range" id="palette_size" min="2" max="256" value="24"><span class="val" id="palette_sizeV">24</span></div>
+    <label>Bits per channel</label>
+    <select id="bits">
+      <option value="">8-8-8 &ndash; full</option>
+      <option value="5-5-5">5-5-5 &ndash; SNES</option>
+      <option value="3-3-3">3-3-3 &ndash; Genesis</option>
+      <option value="3-3-2">3-3-2 &ndash; VGA 256</option>
+      <option value="2-2-2">2-2-2 &ndash; Master System</option>
+      <option value="1-1-1">1-1-1 &ndash; 8 colours</option>
+    </select>
+    <div class="check"><input type="checkbox" id="tiles"><label for="tiles">NES tile limit (4 colours per 8&times;8)</label></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Abstraction</legend>
+    <label>Texture removal &mdash; the anti&#8209;noise dial</label>
+    <div class="row"><input type="range" id="texture_removal" min="0" max="100" value="35"><span class="val" id="texture_removalV">0.35</span></div>
+    <label>Shading bands (0 = off)</label>
+    <div class="row"><input type="range" id="luma_bands" min="0" max="16" value="0"><span class="val" id="luma_bandsV">0</span></div>
+    <label>Saturation</label>
+    <div class="row"><input type="range" id="saturation" min="0" max="250" value="115"><span class="val" id="saturationV">1.15</span></div>
+    <label>Extra low&#8209;pass (grainy footage only)</label>
+    <div class="row"><input type="range" id="smooth_radius_cells" min="0" max="200" value="0"><span class="val" id="smooth_radius_cellsV">0.00</span></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Outlines</legend>
+    <div class="check"><input type="checkbox" id="outlines" checked><label for="outlines">Draw outlines</label></div>
+    <label>Strength</label>
+    <div class="row"><input type="range" id="outline_strength" min="0" max="100" value="75"><span class="val" id="outline_strengthV">0.75</span></div>
+    <label>Darken</label>
+    <div class="row"><input type="range" id="outline_darken" min="0" max="100" value="55"><span class="val" id="outline_darkenV">0.55</span></div>
+    <div class="check"><input type="checkbox" id="snap_lines"><label for="snap_lines">Snap lines to grid</label></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Dithering</legend>
+    <label>Mode</label>
+    <select id="dither_mode">
+      <option value="none">none</option><option value="bayer2">bayer2</option>
+      <option value="bayer4">bayer4</option><option value="bayer8">bayer8</option>
+      <option value="bluenoise">bluenoise</option>
+    </select>
+    <label>Amount</label>
+    <div class="row"><input type="range" id="dither_amount" min="0" max="100" value="50"><span class="val" id="dither_amountV">0.50</span></div>
+    <label>Selective threshold &mdash; higher keeps flat areas clean</label>
+    <div class="row"><input type="range" id="selective_threshold" min="0" max="20" value="2"><span class="val" id="selective_thresholdV">0.020</span></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Output</legend>
+    <div class="check"><input type="checkbox" id="crt"><label for="crt">CRT scanlines</label></div>
+    <div class="check"><input type="checkbox" id="temporal" checked><label for="temporal">Temporal stabilization (video)</label></div>
+    <label>Preview quality</label>
+    <select id="tier"><option value="fast">fast &ndash; responsive</option><option value="quality">quality &ndash; slow</option></select>
+    <label>Preview width (px)</label>
+    <select id="preview_width">
+      <option value="480">480</option><option value="640" selected>640</option>
+      <option value="854">854</option><option value="1280">1280</option>
+    </select>
+  </fieldset>
+</aside>
+
+<main>
+  <div id="msg"></div>
+  <div class="views">
+    <div class="view"><h2>Source</h2><img id="imgSrc" alt="source"></div>
+    <div class="view">
+      <h2>Pixel art</h2>
+      <img id="imgOut" alt="output">
+      <div class="stats" id="stats"></div>
+      <div class="swatches" id="swatches"></div>
+    </div>
+  </div>
+  <div class="view" id="jobBox" style="margin-top:14px;display:none">
+    <h2>Full render</h2>
+    <div id="jobMsg" style="color:var(--dim)"></div>
+    <div class="bar"><i id="jobBar"></i></div>
+  </div>
+  <div class="view" id="yamlBox" style="margin-top:14px;display:none">
+    <h2>Preset YAML &mdash; save into src/vid2_8bit/presets/</h2>
+    <pre id="yamlOut"></pre>
+  </div>
+</main>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const SLIDERS = {
+  cell_size:{d:0}, palette_size:{d:0}, contrast_weight:{s:.01,d:2},
+  texture_removal:{s:.01,d:2}, luma_bands:{d:0}, saturation:{s:.01,d:2},
+  smooth_radius_cells:{s:.01,d:2}, outline_strength:{s:.01,d:2},
+  outline_darken:{s:.01,d:2}, dither_amount:{s:.01,d:2},
+  selective_threshold:{s:.001,d:3},
+};
+const SELECTS = ['preset','sample_method','palette_mode','hardware_palette','bits',
+                 'dither_mode','tier','preview_width'];
+const CHECKS  = ['tiles','outlines','snap_lines','crt','temporal'];
+
+function params(){
+  const p = {source:$('source').value.trim(), frame:+$('frame').value};
+  for(const k in SLIDERS){ const c=SLIDERS[k]; p[k] = +$(k).value * (c.s||1); }
+  SELECTS.forEach(k => p[k] = $(k).value);
+  CHECKS.forEach(k => p[k] = $(k).checked);
+  return p;
+}
+function syncLabels(){
+  for(const k in SLIDERS){ const c=SLIDERS[k];
+    $(k+'V').textContent = (+$(k).value*(c.s||1)).toFixed(c.d); }
+  $('frameV').textContent = $('frame').value;
+  $('hwWrap').style.display = $('palette_mode').value==='hardware' ? 'block':'none';
+}
+function msg(text, kind){ const m=$('msg'); m.textContent=text; m.className=kind||''; }
+
+let timer=null, inflight=false, queued=false;
+function schedule(){ clearTimeout(timer); timer=setTimeout(render, 180); }
+
+async function render(){
+  const p = params();
+  if(!p.source){ return; }
+  if(inflight){ queued=true; return; }
+  inflight=true; $('live').innerHTML='<span class="spin"></span> rendering';
+  try{
+    const r = await fetch('/api/render',{method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(p)});
+    if(!r.ok){ const e=await r.json(); throw new Error(e.error||'render failed'); }
+    const stats = JSON.parse(r.headers.get('X-Stats')||'{}');
+    const blob = await r.blob();
+    const old = $('imgOut').src;
+    $('imgOut').src = URL.createObjectURL(blob);
+    if(old.startsWith('blob:')) URL.revokeObjectURL(old);
+    $('stats').innerHTML =
+      `logical <b>${stats.logical}</b>` +
+      `<span>output <b>${stats.output}</b></span>` +
+      `<span>cell <b>${stats.cell}px</b></span>` +
+      `<span>palette <b>${stats.palette}</b></span>` +
+      `<span>isolated px <b>${stats.noise}%</b></span>`;
+    $('swatches').innerHTML = (stats.colors||[])
+      .map(c=>`<span class="sw" style="background:${c}" title="${c}"></span>`).join('');
+    msg('', '');
+  }catch(err){ msg(err.message,'err'); }
+  finally{
+    inflight=false; $('live').textContent='';
+    if(queued){ queued=false; render(); }
+  }
+}
+
+async function loadSource(){
+  const path = $('source').value.trim();
+  if(!path){ msg('Enter a file path first.','err'); return; }
+  try{
+    const r = await fetch('/api/source?path='+encodeURIComponent(path));
+    const j = await r.json();
+    if(!j.ok) throw new Error(j.error);
+    $('frame').max = Math.max(0, j.frames-1);
+    $('frame').value = Math.min($('frame').value, j.frames-1);
+    $('srcInfo').textContent =
+      `${j.kind} ${j.width}x${j.height}` + (j.kind==='video' ? `, ${j.frames} frames @ ${j.fps.toFixed(2)}fps` : '');
+    msg('', ''); syncLabels(); showOriginal(); render();
+  }catch(err){ msg(err.message,'err'); }
+}
+function showOriginal(){
+  const p = params(); if(!p.source) return;
+  $('imgSrc').src = `/api/original?source=${encodeURIComponent(p.source)}`
+    + `&frame=${p.frame}&preview_width=${p.preview_width}`;
+}
+
+$('btnLoad').onclick = loadSource;
+$('source').addEventListener('keydown', e => { if(e.key==='Enter') loadSource(); });
+$('frame').addEventListener('input', ()=>{ syncLabels(); showOriginal(); schedule(); });
+Object.keys(SLIDERS).forEach(k =>
+  $(k).addEventListener('input', ()=>{ syncLabels(); schedule(); }));
+SELECTS.filter(k=>k!=='preset').forEach(k =>
+  $(k).addEventListener('change', ()=>{ syncLabels();
+    if(k==='preview_width') showOriginal(); schedule(); }));
+CHECKS.forEach(k => $(k).addEventListener('change', schedule));
+
+$('btnApply').onclick = async () => {
+  const name = $('preset').value;
+  const r = await fetch('/api/preset?name='+encodeURIComponent(name));
+  const j = await r.json();
+  if(!j.ok){ msg(j.error,'err'); return; }
+  const c = j.config;
+  for(const k in SLIDERS){ if(c[k]!=null) $(k).value = Math.round(c[k]/(SLIDERS[k].s||1)); }
+  ['sample_method','palette_mode','hardware_palette','bits','dither_mode']
+    .forEach(k=>{ if(c[k]!=null) $(k).value = c[k]; });
+  CHECKS.forEach(k=>{ if(c[k]!=null) $(k).checked = !!c[k]; });
+  syncLabels(); render(); msg(`Applied preset "${name}".`,'ok');
+};
+
+$('btnYaml').onclick = async () => {
+  const r = await fetch('/api/yaml',{method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify(params())});
+  const j = await r.json();
+  if(!j.ok){ msg(j.error,'err'); return; }
+  $('yamlBox').style.display='block'; $('yamlOut').textContent = j.yaml;
+  $('yamlBox').scrollIntoView({behavior:'smooth'});
+};
+
+$('btnConvert').onclick = async () => {
+  const p = params(); p.render_tier = 'quality';
+  if(!p.source){ msg('Load a source file first.','err'); return; }
+  const r = await fetch('/api/convert',{method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify(p)});
+  const j = await r.json();
+  if(!j.ok){ msg(j.error,'err'); return; }
+  $('jobBox').style.display='block';
+  msg('Rendering at quality tier. This is slow - roughly 2-3s per frame at 720p.','ok');
+  poll();
+};
+
+async function poll(){
+  const r = await fetch('/api/progress'); const j = await r.json();
+  $('jobMsg').textContent = j.error ? j.error : (j.message||'');
+  $('jobBar').style.width = j.total ? (100*j.done/j.total)+'%' : '0%';
+  if(j.running){ setTimeout(poll, 600); }
+  else if(j.error){ msg(j.error,'err'); }
+  else if(j.output){ msg('Done: '+j.output,'ok'); $('jobBar').style.width='100%'; }
+}
+
+(async function init(){
+  const r = await fetch('/api/presets'); const j = await r.json();
+  $('preset').innerHTML = j.presets.map(p=>`<option value="${p.name}">${p.name}</option>`).join('');
+  const descs = Object.fromEntries(j.presets.map(p=>[p.name,p.description]));
+  $('preset').value = 'tetris-movie';
+  const upd = ()=> $('presetDesc').textContent = descs[$('preset').value]||'';
+  $('preset').addEventListener('change', upd); upd();
+  syncLabels();
+})();
+</script>
+</body>
+</html>

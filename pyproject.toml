@@ -26,4 +26,4 @@ vid2-8bit = "vid2_8bit.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-vid2_8bit = ["presets/*.yaml"]
+vid2_8bit = ["presets/*.yaml", "web/*.html"]

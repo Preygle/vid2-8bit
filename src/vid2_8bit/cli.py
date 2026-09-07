@@ -198,6 +198,12 @@ def cmd_preview(args) -> int:
     return run_preview(args.input, cfg, args.index)
 
 
+def cmd_web(args) -> int:
+    from .web.server import serve
+
+    return serve(host=args.host, port=args.port, open_browser=not args.no_browser)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="vid2-8bit",
@@ -241,7 +247,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-frames", type=int, default=60)
     p.set_defaults(func=cmd_metrics)
 
-    p = sub.add_parser("preview", help="interactive preview GUI")
+    p = sub.add_parser("web", help="local web UI for tweaking parameters")
+    p.add_argument("--port", type=int, default=8750)
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--no-browser", action="store_true")
+    p.add_argument("-v", "--verbose", action="store_true")
+    p.set_defaults(func=cmd_web)
+
+    p = sub.add_parser("preview", help="interactive preview GUI (OpenCV window)")
     p.add_argument("input")
     p.add_argument("--index", "-i", type=int, default=0)
     _add_common(p)

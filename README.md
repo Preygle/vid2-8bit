@@ -245,7 +245,39 @@ at reduced resolution, CPU is often adequate.
 
 ---
 
-## Usage (target CLI — M0)
+## Web UI
+
+```
+run-webapp.bat
+```
+
+Double-click it. The script finds Python, checks ffmpeg, installs any missing packages, starts a
+local server and opens your browser. Leave the console window open; Ctrl+C there stops it.
+
+Paste a video or image path, press **Load**, then drag sliders — the pixel-art preview re-renders
+next to the source as you go (~0.4s per update at the fast tier). Every parameter is exposed: cell
+size, sampling method, palette mode/size, hardware palettes, bits-per-channel, NES tile limits,
+texture removal, shading bands, saturation, outlines, dithering, CRT.
+
+**Export preset** dumps YAML you can drop straight into `src/vid2_8bit/presets/`.
+**Render full video** runs the whole clip at the quality tier with a progress bar.
+
+The preview keeps the same *logical* resolution as the final render, so what you tune is what you
+get — it works from a downscaled source and scales the cell size to match, rather than applying the
+full cell size to a smaller image and showing you something twice as chunky as reality.
+
+Options: `run-webapp.bat --port 9000`, `run-webapp.bat --no-browser`. Binds `127.0.0.1` only; it
+takes a filesystem path and starts renders, so it must not be exposed to a network.
+
+Equivalent without the .bat:
+
+```bash
+vid2-8bit web --port 8750
+```
+
+---
+
+## Usage (CLI)
 
 ```bash
 vid2-8bit convert in.mp4 -o out.mp4 --preset nes
