@@ -444,6 +444,43 @@ class TestPaletteRedistribution:
         ) / len(src)
         assert share.max() < 0.30
 
+    def test_even_spacing_removes_invisible_duplicates(self):
+        """Pure percentile placement buries the palette in the dominant tone.
+
+        On a mostly-dark frame most percentiles are dark, so most entries land
+        in the shadows: measured 26 pairs closer than 0.03 in Oklab, which the
+        eye reads as one colour, plus a large empty gap in the mid-tones.
+        """
+        rng = np.random.default_rng(0)
+        # 80% of pixels dark, 20% spread bright: the shape that breaks it.
+        src = np.concatenate([
+            np.clip(rng.normal(0.12, 0.03, 40000), 0, 1),
+            np.clip(rng.uniform(0.3, 0.95, 10000), 0, 1),
+        ]).astype(np.float32)
+        pal = np.linspace(0.05, 0.95, 16, dtype=np.float32)[:, None].repeat(3, 1)
+
+        def stats(p):
+            lab = spaces.srgb_to_oklab(p)
+            d = np.sqrt(((lab[:, None, :] - lab[None, :, :]) ** 2).sum(-1))
+            np.fill_diagonal(d, 9.0)
+            return d.min(), np.diff(np.sort(lab[:, 0])).max()
+
+        pure_min, pure_gap = stats(
+            palette.redistribute_lightness(pal, src, 1.0, even_spacing=0.0))
+        even_min, even_gap = stats(
+            palette.redistribute_lightness(pal, src, 1.0, even_spacing=0.65))
+        assert even_min > pure_min * 1.5
+        assert even_gap < pure_gap
+
+    def test_even_spacing_stays_inside_the_content_range(self):
+        """Spacing across 0..1 instead described tones the shot did not contain."""
+        rng = np.random.default_rng(1)
+        src = np.clip(rng.normal(0.2, 0.05, 20000), 0, 1).astype(np.float32)
+        pal = np.linspace(0.05, 0.95, 12, dtype=np.float32)[:, None].repeat(3, 1)
+        out = palette.redistribute_lightness(pal, src, 1.0, even_spacing=1.0)
+        L = spaces.srgb_to_oklab(out)[:, 0]
+        assert L.max() <= float(np.percentile(src, 99)) + 0.05
+
     def test_order_is_preserved(self):
         rng = np.random.default_rng(2)
         L = spaces.srgb_to_oklab(

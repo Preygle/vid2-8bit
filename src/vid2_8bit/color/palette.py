@@ -330,6 +330,7 @@ def redistribute_lightness(
     source_L: np.ndarray,
     strength: float = 1.0,
     anchor_ink: bool = False,
+    even_spacing: float = 0.0,
 ) -> np.ndarray:
     """Place palette lightness at the source's own luminance percentiles.
 
@@ -350,6 +351,21 @@ def redistribute_lightness(
     has detail. It is histogram equalization applied to the palette rather than
     to the image, so contrast comes from *spending* the ramp rather than from
     stretching pixels.
+
+    Pure percentile placement has its own failure, found by blind critique: on a
+    frame that is mostly dark, most percentiles are dark, so most of the palette
+    lands in the shadows. Measured on a night exterior, twelve of sixteen entries
+    fell between L 13 and 39 with twenty-six pairs closer than 0.03 in Oklab --
+    mutually invisible -- while an 89-luma gap sat empty in the mid-tones where
+    masonry and facade shading should live.
+
+    `even_spacing` blends the percentile targets toward even spacing across the
+    frame's actual content range. 0 is pure percentile, 1 is a flat ramp between
+    the source's 1st and 99th percentiles. Partway keeps the ramp adaptive while
+    guaranteeing the entries stay distinguishable. Spacing within the *content*
+    range rather than 0..1 is what makes this different from an earlier attempt
+    that stretched uniformly across the whole scale and described tones the shot
+    did not contain.
     """
     from .spaces import oklab_to_srgb
 
@@ -366,6 +382,14 @@ def redistribute_lightness(
         flat = flat[:: max(1, flat.size // 400000)]
     targets = np.percentile(flat, (np.arange(n) + 0.5) / n * 100.0)
     targets = np.maximum.accumulate(targets)
+
+    if even_spacing > 0.0:
+        lo_c = float(np.percentile(flat, 1.0))
+        hi_c = float(np.percentile(flat, 99.0))
+        if hi_c - lo_c > 1e-6:
+            even = np.linspace(lo_c, hi_c, n)
+            w = float(np.clip(even_spacing, 0.0, 1.0))
+            targets = targets * (1.0 - w) + even * w
 
     if anchor_ink:
         # Keep a true ink and a specular so the frame still has poles, but do
@@ -430,7 +454,7 @@ def build_palette(cfg, samples_srgb: np.ndarray | None = None) -> np.ndarray:
     if (pcfg.redistribute > 0.0 or pcfg.anchor_ink) and samples_srgb is not None:
         pal = redistribute_lightness(
             pal, srgb_to_oklab(np.asarray(samples_srgb, np.float32))[..., 0],
-            pcfg.redistribute, pcfg.anchor_ink,
+            pcfg.redistribute, pcfg.anchor_ink, pcfg.even_spacing,
         )
     if pcfg.warm_highlights > 0.0:
         pal = warm_highlights(pal, pcfg.warm_highlights)

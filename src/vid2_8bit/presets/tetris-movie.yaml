@@ -53,6 +53,9 @@ palette:
   chroma_weight: 1.3
   # The decisive palette setting - see finding 2 above.
   redistribute: 1.0
+  # Keeps entries distinguishable; pure percentile placement buries most of the
+  # palette in whatever tone dominates the frame.
+  even_spacing: 0.65
   warm_highlights: 0.35
   anchor_ink: true
   # Removes isolated cells that sit close to their neighbours (blurred gradient

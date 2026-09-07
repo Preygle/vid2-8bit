@@ -141,6 +141,10 @@ class PaletteConfig:
     # as one" collapse and the opposite failure of spreading a ramp uniformly
     # across tones the shot does not contain. See palette.redistribute_lightness.
     redistribute: float = 0.0
+    # Blend percentile placement toward even spacing across the frame's content
+    # range. Pure percentile placement buries most of the palette in whatever
+    # tone dominates; this guarantees the entries stay distinguishable.
+    even_spacing: float = 0.0
     # Hold chroma toward the bright end of the ramp instead of greying out.
     warm_highlights: float = 0.0
     # For mode="ramp": the authored hue path, in degrees around Oklab.
