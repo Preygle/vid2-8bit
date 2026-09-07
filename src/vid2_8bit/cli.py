@@ -214,6 +214,134 @@ def cmd_web(args) -> int:
     return serve(host=args.host, port=args.port, open_browser=not args.no_browser)
 
 
+def cmd_gen(args) -> int:
+    """Generative assist: distil a look into a preset, or render frames."""
+    import cv2
+    import yaml
+
+    from .gen import (ComfyClient, ComfyUnavailable, img2img_graph,
+                      keyframe_indices, measure, save_palette_hex)
+    from .io import decode
+    from .io.encode import write_png
+
+    client = ComfyClient(host=args.host)
+    if not client.available():
+        print(f"error: ComfyUI is not reachable at {args.host}.\n"
+              f"Start it with comfyui-rocm.bat, then retry.", file=sys.stderr)
+        return 1
+
+    ckpts = client.models("checkpoints")
+    loras = client.models("loras")
+    if args.list_models:
+        print("checkpoints:")
+        for c in ckpts:
+            print(f"  {c}")
+        print("loras:")
+        for l in loras:
+            print(f"  {l}")
+        return 0
+
+    if not args.input:
+        print("error: an input file is required unless --list-models is given",
+              file=sys.stderr)
+        return 1
+
+    checkpoint = args.checkpoint or (ckpts[0] if ckpts else None)
+    if not checkpoint:
+        print("error: no checkpoints visible to ComfyUI. Put one in "
+              "models/checkpoints and restart it.", file=sys.stderr)
+        return 1
+    if args.checkpoint and args.checkpoint not in ckpts:
+        match = [c for c in ckpts if args.checkpoint.lower() in c.lower()]
+        if not match:
+            print(f"error: checkpoint {args.checkpoint!r} not found. "
+                  f"Available: {ckpts}", file=sys.stderr)
+            return 1
+        checkpoint = match[0]
+
+    lora = args.lora
+    if lora and lora not in loras:
+        match = [l for l in loras if args.lora.lower() in l.lower()]
+        if not match:
+            print(f"error: LoRA {args.lora!r} not found. Available: {loras}",
+                  file=sys.stderr)
+            return 1
+        lora = match[0]
+
+    src = Path(args.input)
+    is_image = src.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp", ".webp")
+    if is_image:
+        bgr = cv2.imread(str(src), cv2.IMREAD_COLOR)
+        if bgr is None:
+            print(f"error: could not read {src}", file=sys.stderr)
+            return 1
+        frames = [cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)]
+        indices = [0]
+    else:
+        info = decode.probe(src)
+        indices = keyframe_indices(info.n_frames, args.keyframes)
+        frames = [decode.read_frame(src, i) for i in indices]
+
+    print(f"checkpoint : {checkpoint}")
+    print(f"lora       : {lora or '(none)'}")
+    print(f"keyframes  : {len(frames)} at {indices}")
+    print(f"denoise    : {args.denoise}   steps {args.steps}   cfg {args.cfg}")
+
+    generated: list[np.ndarray] = []
+    for n, (idx, frame) in enumerate(zip(indices, frames), 1):
+        # SDXL wants roughly a megapixel, and downscaling first also keeps a
+        # 10 GB card inside its budget. Dimensions are rounded to multiples of
+        # 8 because the VAE needs it.
+        h, w = frame.shape[:2]
+        scale = min(1.0, args.size / max(w, h))
+        if scale < 1.0:
+            frame = cv2.resize(
+                frame,
+                (max(8, int(w * scale) // 8 * 8), max(8, int(h * scale) // 8 * 8)),
+                interpolation=cv2.INTER_AREA,
+            )
+        name = client.upload_image(frame)
+        graph = img2img_graph(
+            image_name=name, checkpoint=checkpoint, positive=args.prompt,
+            lora=lora, lora_strength=args.lora_strength, denoise=args.denoise,
+            steps=args.steps, cfg=args.cfg, seed=args.seed + n,
+        )
+        sys.stderr.write(f"\r  generating keyframe {n}/{len(frames)} ...")
+        sys.stderr.flush()
+        try:
+            out = client.run(graph)
+        except ComfyUnavailable as exc:
+            sys.stderr.write("\n")
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if out:
+            generated.append(out[0])
+            write_png(Path(args.outdir) / f"keyframe_{idx:06d}.png", out[0])
+    sys.stderr.write("\n")
+
+    if not generated:
+        print("error: ComfyUI returned no images", file=sys.stderr)
+        return 1
+    print(f"wrote {len(generated)} keyframe(s) to {args.outdir}")
+
+    if args.mode == "render":
+        return 0
+
+    fit = measure(generated, palette_size=args.palette_size)
+    for note in fit.notes:
+        print(f"  {note}")
+    out_preset = Path(args.preset_out)
+    out_preset.parent.mkdir(parents=True, exist_ok=True)
+    with out_preset.open("w", encoding="utf-8") as fh:
+        yaml.safe_dump(fit.to_preset(), fh, sort_keys=False)
+    save_palette_hex(fit.palette, out_preset.with_suffix(".hex"))
+    print(f"wrote {out_preset} and {out_preset.with_suffix('.hex')}")
+    print(f"\nrender the clip deterministically with:\n"
+          f"  vid2-8bit convert {args.input} -o out.mp4 "
+          f"--config {out_preset} --fps 12")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="vid2-8bit",
@@ -256,6 +384,32 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("input")
     p.add_argument("--max-frames", type=int, default=60)
     p.set_defaults(func=cmd_metrics)
+
+    p = sub.add_parser("gen", help="generative assist via a running ComfyUI")
+    p.add_argument("input", nargs="?", default=None)
+    p.add_argument("--mode", choices=("distill", "render"), default="distill",
+                   help="distill: measure a look into a preset (keeps temporal "
+                        "stability, use for video). render: img2img the frames "
+                        "directly (better stills, boils on video).")
+    p.add_argument("--host", default="127.0.0.1:8188")
+    p.add_argument("--list-models", action="store_true")
+    p.add_argument("--checkpoint", default=None)
+    p.add_argument("--lora", default=None, help="substring match is fine")
+    p.add_argument("--lora-strength", type=float, default=1.0)
+    p.add_argument("--prompt", default="pixel art, 16-bit game art, limited "
+                                       "palette, crisp blocky pixels, flat "
+                                       "colour regions, clean shapes")
+    p.add_argument("--keyframes", type=int, default=6)
+    p.add_argument("--denoise", type=float, default=0.55)
+    p.add_argument("--steps", type=int, default=22)
+    p.add_argument("--cfg", type=float, default=6.0)
+    p.add_argument("--seed", type=int, default=1234)
+    p.add_argument("--size", type=int, default=1024, help="longest edge sent to SDXL")
+    p.add_argument("--palette-size", type=int, default=24)
+    p.add_argument("--outdir", default="out/gen")
+    p.add_argument("--preset-out", default="presets-tuned/distilled.yaml")
+    p.add_argument("-v", "--verbose", action="store_true")
+    p.set_defaults(func=cmd_gen)
 
     p = sub.add_parser("web", help="local web UI for tweaking parameters")
     p.add_argument("--port", type=int, default=8750)

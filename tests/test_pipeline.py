@@ -641,6 +641,77 @@ class TestPerformance:
         assert cfg.temporal.decimate_fps == 12.0 and cfg.output.fps == 12.0
 
 
+class TestGenAssist:
+    """The generative path must stay strictly optional."""
+
+    def test_importing_gen_does_not_pull_in_torch(self):
+        """A plain render must never depend on a multi-gigabyte stack."""
+        import subprocess
+        import sys as _sys
+
+        code = (
+            "import sys; import vid2_8bit.gen; "
+            "assert 'torch' not in sys.modules, sorted(sys.modules)[:0] or 'torch imported'; "
+            "print('ok')"
+        )
+        r = subprocess.run([_sys.executable, "-c", code], capture_output=True,
+                           text=True, cwd="src")
+        assert r.returncode == 0, r.stderr[-500:]
+
+    def test_unreachable_comfy_reports_cleanly(self):
+        """No stack trace when ComfyUI is simply not running."""
+        from vid2_8bit.gen import ComfyClient
+
+        client = ComfyClient(host="127.0.0.1:59999")
+        assert client.available() is False
+
+    def test_img2img_graph_is_well_formed(self):
+        from vid2_8bit.gen import img2img_graph
+
+        g = img2img_graph("x.png", "model.safetensors", "pixel art")
+        assert all("class_type" in n and "inputs" in n for n in g.values())
+        # Every node reference must point at a node that exists.
+        for node in g.values():
+            for v in node["inputs"].values():
+                if isinstance(v, list) and len(v) == 2 and isinstance(v[0], str):
+                    assert v[0] in g, f"dangling reference to {v[0]}"
+
+    def test_lora_is_spliced_between_checkpoint_and_sampler(self):
+        from vid2_8bit.gen import img2img_graph
+
+        plain = img2img_graph("x.png", "m.safetensors", "p")
+        withl = img2img_graph("x.png", "m.safetensors", "p", lora="l.safetensors")
+        assert plain["7"]["inputs"]["model"][0] == "1"
+        assert withl["7"]["inputs"]["model"][0] == "4"
+
+    def test_keyframe_indices_are_spread_and_in_range(self):
+        from vid2_8bit.gen import keyframe_indices
+
+        idx = keyframe_indices(600, 6)
+        assert len(idx) == 6
+        assert all(0 <= i < 600 for i in idx)
+        assert idx == sorted(idx)
+        assert keyframe_indices(3, 10) == [0, 1, 2]
+
+    def test_measure_emits_a_loadable_preset(self):
+        """The distilled preset must survive a real config load."""
+        from vid2_8bit.gen import measure
+
+        rng = np.random.default_rng(0)
+        frames = []
+        for _ in range(2):
+            small = (rng.random((40, 60, 3)) * 255).astype(np.uint8)
+            frames.append(np.repeat(np.repeat(small, 8, 0), 8, 1))
+        fit = measure(frames, palette_size=12)
+        assert fit.palette.shape[1] == 3
+        assert 60 <= fit.target_width <= 480
+        assert 0.0 <= fit.contrast <= 1.0
+        doc = fit.to_preset()
+        cfg = build_config(overrides={k: v for k, v in doc.items()
+                                      if k not in ("description", "extends")})
+        cfg.validate()
+
+
 # -- metrics ---------------------------------------------------------------
 
 
