@@ -154,6 +154,93 @@ def config_from_params(params: dict):
     return cfg
 
 
+# -- file selection --------------------------------------------------------
+
+# Runs in a throwaway subprocess. Tk must own a thread's event loop, and driving
+# it from inside a served request tends to deadlock or crash on Windows; a
+# separate process sidesteps the whole problem and cannot take the server down.
+_PICKER_SCRIPT = r"""
+import sys, tkinter as tk
+from tkinter import filedialog
+root = tk.Tk()
+root.withdraw()
+root.attributes("-topmost", True)
+path = filedialog.askopenfilename(
+    title="Choose a video or image",
+    filetypes=[
+        ("Video and image files",
+         "*.mp4 *.mkv *.mov *.webm *.avi *.m4v *.png *.jpg *.jpeg *.bmp *.webp"),
+        ("Video files", "*.mp4 *.mkv *.mov *.webm *.avi *.m4v"),
+        ("Image files", "*.png *.jpg *.jpeg *.bmp *.webp"),
+        ("All files", "*.*"),
+    ],
+)
+root.destroy()
+sys.stdout.write(path or "")
+"""
+
+
+def native_file_dialog() -> dict:
+    """Open the OS file picker on the machine running the server.
+
+    Preferred over uploading because this is a localhost tool: the file is
+    already on this disk, so picking it costs nothing, while uploading a
+    multi-gigabyte video through the browser would copy it for no reason.
+    """
+    import subprocess
+    import sys
+
+    kwargs: dict = {}
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", _PICKER_SCRIPT],
+            capture_output=True, text=True, timeout=600, **kwargs
+        )
+    except FileNotFoundError:
+        return {"ok": False, "error": "could not launch the file dialog"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "file dialog timed out"}
+
+    if proc.returncode != 0:
+        detail = (proc.stderr or "").strip().splitlines()[-1:] or ["unknown error"]
+        return {
+            "ok": False,
+            "error": f"native file dialog unavailable ({detail[0]}). "
+                     f"Use the Upload button instead.",
+        }
+    path = (proc.stdout or "").strip()
+    if not path:
+        return {"ok": False, "cancelled": True}
+    return {"ok": True, "path": path}
+
+
+def uploads_dir() -> Path:
+    import tempfile
+
+    d = Path(tempfile.gettempdir()) / "vid2-8bit-uploads"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def save_upload(filename: str, data: bytes) -> Path:
+    """Persist a browser-uploaded file and return its path.
+
+    The browser posts raw bytes with the name in the query string rather than a
+    multipart form: the stdlib's `cgi` module was removed in Python 3.13, and
+    hand-rolling a multipart parser to receive a single file would be pure
+    overhead when we control both ends.
+    """
+    safe = Path(filename or "upload").name
+    safe = "".join(c for c in safe if c.isalnum() or c in "._- ()[]").strip() or "upload"
+    if Path(safe).suffix.lower() not in IMAGE_SUFFIXES | VIDEO_SUFFIXES:
+        raise ValueError(f"unsupported file type: {Path(safe).suffix or '(none)'}")
+    target = uploads_dir() / safe
+    target.write_bytes(data)
+    return target
+
+
 def _resolve_source(raw: str) -> Path:
     path = Path(raw.strip().strip('"').strip("'")).expanduser()
     if not path.is_absolute():
@@ -201,12 +288,16 @@ def source_info(source: str) -> dict:
         if bgr is None:
             raise ValueError(f"could not read {path}")
         h, w = bgr.shape[:2]
-        return {"path": str(path), "kind": "image", "width": w, "height": h,
-                "frames": 1, "fps": 0}
+        return {"path": str(path), "name": path.name, "kind": "image",
+                "width": w, "height": h, "frames": 1, "fps": 0}
     info = decode.probe(path)
     return {
-        "path": str(path), "kind": "video", "width": info.width,
-        "height": info.height, "frames": max(1, info.n_frames), "fps": info.fps,
+        # `name` is sent so the browser never has to split OS paths itself --
+        # a JS regex that handles both separators is easy to get subtly wrong,
+        # and the server already knows the answer.
+        "path": str(path), "name": path.name, "kind": "video",
+        "width": info.width, "height": info.height,
+        "frames": max(1, info.n_frames), "fps": info.fps,
     }
 
 
@@ -489,8 +580,38 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, 400)
 
     def do_POST(self):
-        route = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        route = parsed.path
+        query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
         try:
+            # Upload carries raw file bytes, not JSON, so it is handled first.
+            if route == "/api/upload":
+                length = int(self.headers.get("Content-Length") or 0)
+                if length <= 0:
+                    return self._json({"ok": False, "error": "empty upload"}, 400)
+                if length > 4 * 1024 * 1024 * 1024:
+                    return self._json(
+                        {"ok": False,
+                         "error": "file larger than 4 GB; use Browse instead, "
+                                  "which needs no copy"}, 400)
+                # Read in chunks so a large video does not spike memory as badly
+                # and a truncated stream fails cleanly.
+                buf = io.BytesIO()
+                remaining = length
+                while remaining > 0:
+                    chunk = self.rfile.read(min(1 << 20, remaining))
+                    if not chunk:
+                        break
+                    buf.write(chunk)
+                    remaining -= len(chunk)
+                if remaining > 0:
+                    return self._json({"ok": False, "error": "upload truncated"}, 400)
+                path = save_upload(query.get("name", "upload"), buf.getvalue())
+                return self._json({"ok": True, **source_info(str(path))})
+
+            if route == "/api/browse":
+                return self._json(native_file_dialog())
+
             params = self._read_json()
 
             if route == "/api/render":

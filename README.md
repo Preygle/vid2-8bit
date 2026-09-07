@@ -254,7 +254,9 @@ run-webapp.bat
 Double-click it. The script finds Python, checks ffmpeg, installs any missing packages, starts a
 local server and opens your browser. Leave the console window open; Ctrl+C there stops it.
 
-Paste a video or image path, press **Load**, then drag sliders — the pixel-art preview re-renders
+Pick a file three ways: **Browse** opens this PC's own file dialog (no copying &mdash; best for
+large video), **Upload** uses the browser's file picker, or drag a file onto the drop zone. Then
+drag sliders — the pixel-art preview re-renders
 next to the source as you go (~0.4s per update at the fast tier). Every parameter is exposed: cell
 size, sampling method, palette mode/size, hardware palettes, bits-per-channel, NES tile limits,
 texture removal, shading bands, saturation, outlines, dithering, CRT.

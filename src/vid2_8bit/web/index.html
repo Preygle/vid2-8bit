@@ -66,6 +66,14 @@
         border-radius:50%;display:inline-block;animation:sp .7s linear infinite}
   @keyframes sp{to{transform:rotate(360deg)}}
   .hint{color:var(--dim);font-size:11px;margin-top:4px}
+  #drop{border:1.5px dashed var(--line);border-radius:8px;padding:14px 10px;text-align:center;
+        transition:border-color .15s,background .15s;background:#11131a}
+  #drop.over{border-color:var(--accent);background:#16233a}
+  .dz-title{color:var(--dim);font-size:12px}
+  .chosen{margin-top:10px;background:#11131a;border:1px solid var(--line);
+          border-radius:7px;padding:9px 10px}
+  .chosen-name{font-weight:600;font-size:12.5px;word-break:break-all}
+  .chosen-path{word-break:break-all;opacity:.75;font-size:10.5px;margin-top:3px}
 </style>
 </head>
 <body>
@@ -81,10 +89,23 @@
 <aside>
   <fieldset>
     <legend>Source</legend>
-    <label>File path (video or image)</label>
-    <input type="text" id="source" placeholder="C:\path\to\clip.mp4">
-    <div class="hint" id="srcInfo">Enter a path, then press Load.</div>
-    <div class="btns"><button class="ghost" id="btnLoad">Load</button></div>
+    <div id="drop">
+      <div class="dz-title">Drop a video or image here</div>
+      <div class="btns" style="justify-content:center;margin-top:9px">
+        <button id="btnBrowse">Browse&hellip;</button>
+        <button class="ghost" id="btnUpload">Upload&hellip;</button>
+      </div>
+      <div class="hint" style="margin-top:7px">
+        Browse opens this PC's file picker &mdash; no copying, best for large video.
+      </div>
+    </div>
+    <input type="file" id="fileInput" accept="video/*,image/*" hidden>
+    <div id="chosen" class="chosen" style="display:none">
+      <div class="chosen-name" id="chosenName"></div>
+      <div class="hint" id="srcInfo"></div>
+      <div class="hint chosen-path" id="chosenPath"></div>
+    </div>
+    <div class="bar" id="upBar" style="display:none"><i id="upFill"></i></div>
     <label>Frame</label>
     <div class="row">
       <input type="range" id="frame" min="0" max="0" value="0" step="1">
@@ -228,8 +249,9 @@ const SELECTS = ['preset','sample_method','palette_mode','hardware_palette','bit
                  'dither_mode','tier','preview_width'];
 const CHECKS  = ['tiles','outlines','snap_lines','crt','temporal'];
 
+let SOURCE = '';
 function params(){
-  const p = {source:$('source').value.trim(), frame:+$('frame').value};
+  const p = {source:SOURCE, frame:+$('frame').value};
   for(const k in SLIDERS){ const c=SLIDERS[k]; p[k] = +$(k).value * (c.s||1); }
   SELECTS.forEach(k => p[k] = $(k).value);
   CHECKS.forEach(k => p[k] = $(k).checked);
@@ -276,18 +298,25 @@ async function render(){
   }
 }
 
+function applySourceInfo(j){
+  SOURCE = j.path;
+  $('frame').max = Math.max(0, j.frames-1);
+  if(+$('frame').value > j.frames-1) $('frame').value = 0;
+  $('chosen').style.display = 'block';
+  $('chosenName').textContent = j.name || j.path;
+  $('chosenPath').textContent = j.path;
+  $('srcInfo').textContent = `${j.kind} ${j.width}x${j.height}`
+    + (j.kind==='video' ? `, ${j.frames} frames @ ${j.fps.toFixed(2)}fps` : '');
+  syncLabels(); showOriginal(); render();
+}
+
 async function loadSource(){
-  const path = $('source').value.trim();
-  if(!path){ msg('Enter a file path first.','err'); return; }
+  if(!SOURCE){ msg('Choose a file first.','err'); return; }
   try{
-    const r = await fetch('/api/source?path='+encodeURIComponent(path));
+    const r = await fetch('/api/source?path='+encodeURIComponent(SOURCE));
     const j = await r.json();
     if(!j.ok) throw new Error(j.error);
-    $('frame').max = Math.max(0, j.frames-1);
-    $('frame').value = Math.min($('frame').value, j.frames-1);
-    $('srcInfo').textContent =
-      `${j.kind} ${j.width}x${j.height}` + (j.kind==='video' ? `, ${j.frames} frames @ ${j.fps.toFixed(2)}fps` : '');
-    msg('', ''); syncLabels(); showOriginal(); render();
+    applySourceInfo(j); msg('', '');
   }catch(err){ msg(err.message,'err'); }
 }
 function showOriginal(){
@@ -296,8 +325,62 @@ function showOriginal(){
     + `&frame=${p.frame}&preview_width=${p.preview_width}`;
 }
 
-$('btnLoad').onclick = loadSource;
-$('source').addEventListener('keydown', e => { if(e.key==='Enter') loadSource(); });
+$('btnBrowse').onclick = async () => {
+  $('btnBrowse').disabled = true; msg('Opening file picker on this PC...','ok');
+  try{
+    const r = await fetch('/api/browse',{method:'POST'});
+    const j = await r.json();
+    if(j.cancelled){ msg('','' ); return; }
+    if(!j.ok) throw new Error(j.error);
+    SOURCE = j.path; await loadSource();
+  }catch(err){ msg(err.message,'err'); }
+  finally{ $('btnBrowse').disabled = false; }
+};
+
+$('btnUpload').onclick = () => $('fileInput').click();
+$('fileInput').addEventListener('change', e => {
+  if(e.target.files && e.target.files[0]) upload(e.target.files[0]);
+});
+
+async function upload(file){
+  const MB = 1024*1024;
+  $('upBar').style.display='block'; $('upFill').style.width='0%';
+  msg(`Uploading ${file.name} (${(file.size/MB).toFixed(1)} MB)...`,'ok');
+  try{
+    const xhr = new XMLHttpRequest();
+    const done = new Promise((res, rej) => {
+      xhr.upload.onprogress = e => {
+        if(e.lengthComputable) $('upFill').style.width = (100*e.loaded/e.total)+'%';
+      };
+      xhr.onload = () => {
+        try{ const j = JSON.parse(xhr.responseText);
+             j.ok ? res(j) : rej(new Error(j.error)); }
+        catch(_){ rej(new Error('upload failed')); }
+      };
+      xhr.onerror = () => rej(new Error('upload failed'));
+    });
+    xhr.open('POST', '/api/upload?name='+encodeURIComponent(file.name));
+    xhr.send(file);
+    const j = await done;
+    SOURCE = j.path;
+    applySourceInfo(j);
+    msg('', '');
+  }catch(err){ msg(err.message,'err'); }
+  finally{ $('upBar').style.display='none'; }
+}
+
+const dz = $('drop');
+['dragenter','dragover'].forEach(ev => dz.addEventListener(ev, e => {
+  e.preventDefault(); e.stopPropagation(); dz.classList.add('over'); }));
+['dragleave','drop'].forEach(ev => dz.addEventListener(ev, e => {
+  e.preventDefault(); e.stopPropagation(); dz.classList.remove('over'); }));
+dz.addEventListener('drop', e => {
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if(f) upload(f);
+});
+// Stop a stray drop elsewhere on the page from navigating away from the app.
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', e => e.preventDefault());
 $('frame').addEventListener('input', ()=>{ syncLabels(); showOriginal(); schedule(); });
 Object.keys(SLIDERS).forEach(k =>
   $(k).addEventListener('input', ()=>{ syncLabels(); schedule(); }));
@@ -330,7 +413,7 @@ $('btnYaml').onclick = async () => {
 
 $('btnConvert').onclick = async () => {
   const p = params(); p.render_tier = 'quality';
-  if(!p.source){ msg('Load a source file first.','err'); return; }
+  if(!p.source){ msg('Choose a source file first.','err'); return; }
   const r = await fetch('/api/convert',{method:'POST',
     headers:{'Content-Type':'application/json'}, body:JSON.stringify(p)});
   const j = await r.json();
