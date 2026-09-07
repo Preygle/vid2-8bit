@@ -34,6 +34,28 @@ def area_downsample(img: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     return linear_to_srgb(small)
 
 
+def median_downsample(img: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    """Take the MEDIAN of each cell rather than the mean.
+
+    The mean of a cell straddling a dark facade and a lit window returns a
+    midtone that exists nowhere in the scene; do that everywhere and the image
+    turns to sludge, which a blind critic named as one of the tells against the
+    film reference. The median returns whichever value actually dominates the
+    cell, so flat regions stay exactly flat and edges land on one side or the
+    other instead of inventing a halo.
+    """
+    w_out, h_out = size
+    h, w = img.shape[:2]
+    ph, pw = (-h) % h_out, (-w) % w_out
+    if ph or pw:
+        img = np.pad(img, ((0, ph), (0, pw), (0, 0)), mode="edge")
+    bh, bw = img.shape[0] // h_out, img.shape[1] // w_out
+    if bh < 1 or bw < 1:
+        return area_downsample(img, size)
+    blocks = img[: bh * h_out, : bw * w_out].reshape(h_out, bh, w_out, bw, 3)
+    return np.median(blocks, axis=(1, 3)).astype(np.float32)
+
+
 def outline_expansion(
     img_srgb: np.ndarray,
     cell: float,
@@ -175,4 +197,7 @@ def sample_frame(
             cell * cfg.sample.expand_radius,
             weight=cfg.sample.contrast_weight,
         )
+        return median_downsample(src, size)
+    if method == "median":
+        return median_downsample(src, size)
     return area_downsample(src, size)

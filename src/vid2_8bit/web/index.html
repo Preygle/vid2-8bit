@@ -121,12 +121,39 @@
   </fieldset>
 
   <fieldset>
+    <legend>Tone &amp; grade</legend>
+    <div class="hint" style="margin-bottom:6px">
+      Runs before everything else. Cinematic footage uses a fraction of the
+      value range; without this the whole picture stays muddy.
+    </div>
+    <div class="check"><input type="checkbox" id="auto_levels" checked><label for="auto_levels">Auto levels</label></div>
+    <label>Levels strength</label>
+    <div class="row"><input type="range" id="levels_strength" min="0" max="100" value="100"><span class="val" id="levels_strengthV">1.00</span></div>
+    <label>Contrast &mdash; two&#8209;pole S&#8209;curve (ink shadows, lifted highlights)</label>
+    <div class="row"><input type="range" id="contrast" min="0" max="100" value="0"><span class="val" id="contrastV">0.00</span></div>
+    <label>Gamma</label>
+    <div class="row"><input type="range" id="tone_gamma" min="20" max="250" value="100"><span class="val" id="tone_gammaV">1.00</span></div>
+    <label>Grade saturation</label>
+    <div class="row"><input type="range" id="tone_saturation" min="0" max="250" value="100"><span class="val" id="tone_saturationV">1.00</span></div>
+    <label>Style reference image (adopts its grade)</label>
+    <div class="row" style="gap:6px">
+      <input type="text" id="style_reference" placeholder="none" style="flex:1">
+      <button class="ghost" id="btnRef" style="padding:6px 9px">&hellip;</button>
+    </div>
+    <label>Reference transfer strength</label>
+    <div class="row"><input type="range" id="transfer_strength" min="0" max="100" value="0"><span class="val" id="transfer_strengthV">0.00</span></div>
+  </fieldset>
+
+  <fieldset>
     <legend>Size &amp; sampling</legend>
     <label>Cell size &mdash; source pixels per output pixel</label>
     <div class="row"><input type="range" id="cell_size" min="1" max="24" value="6"><span class="val" id="cell_sizeV">6</span></div>
+    <label>Logical width &mdash; 0 uses cell size instead (film sits near 180)</label>
+    <div class="row"><input type="range" id="target_width" min="0" max="640" step="10" value="0"><span class="val" id="target_widthV">0</span></div>
     <label>Sampling method</label>
     <select id="sample_method">
       <option value="outline_expand">outline_expand &ndash; keeps thin lines</option>
+      <option value="median">median &ndash; flat regions stay flat</option>
       <option value="area">area &ndash; plain average</option>
       <option value="superpixel">superpixel &ndash; slow, best edges</option>
     </select>
@@ -140,6 +167,7 @@
     <select id="palette_mode">
       <option value="auto">auto &ndash; fitted to footage</option>
       <option value="hardware">hardware &ndash; real console palette</option>
+      <option value="reference">reference &ndash; colours from the style image</option>
     </select>
     <div id="hwWrap" style="display:none">
       <label>Hardware palette</label>
@@ -160,6 +188,9 @@
       <option value="2-2-2">2-2-2 &ndash; Master System</option>
       <option value="1-1-1">1-1-1 &ndash; 8 colours</option>
     </select>
+    <label>Minimum separation &mdash; forces entries apart in lightness</label>
+    <div class="row"><input type="range" id="redistribute" min="0" max="30" value="0"><span class="val" id="redistributeV">0.000</span></div>
+    <div class="check"><input type="checkbox" id="anchor_ink"><label for="anchor_ink">Anchor ink + specular (true black and near&#8209;white ends)</label></div>
     <div class="check"><input type="checkbox" id="tiles"><label for="tiles">NES tile limit (4 colours per 8&times;8)</label></div>
   </fieldset>
 
@@ -239,15 +270,19 @@
 <script>
 const $ = id => document.getElementById(id);
 const SLIDERS = {
-  cell_size:{d:0}, palette_size:{d:0}, contrast_weight:{s:.01,d:2},
+  cell_size:{d:0}, target_width:{d:0}, palette_size:{d:0}, contrast_weight:{s:.01,d:2},
   texture_removal:{s:.01,d:2}, luma_bands:{d:0}, saturation:{s:.01,d:2},
   smooth_radius_cells:{s:.01,d:2}, outline_strength:{s:.01,d:2},
   outline_darken:{s:.01,d:2}, dither_amount:{s:.01,d:2},
   selective_threshold:{s:.001,d:3},
+  levels_strength:{s:.01,d:2}, contrast:{s:.01,d:2}, tone_gamma:{s:.01,d:2},
+  tone_saturation:{s:.01,d:2}, transfer_strength:{s:.01,d:2},
+  redistribute:{s:.005,d:3},
 };
 const SELECTS = ['preset','sample_method','palette_mode','hardware_palette','bits',
                  'dither_mode','tier','preview_width'];
-const CHECKS  = ['tiles','outlines','snap_lines','crt','temporal'];
+const CHECKS  = ['tiles','outlines','snap_lines','crt','temporal',
+                 'auto_levels','anchor_ink'];
 
 let SOURCE = '';
 function params(){
@@ -255,6 +290,7 @@ function params(){
   for(const k in SLIDERS){ const c=SLIDERS[k]; p[k] = +$(k).value * (c.s||1); }
   SELECTS.forEach(k => p[k] = $(k).value);
   CHECKS.forEach(k => p[k] = $(k).checked);
+  p.style_reference = $('style_reference').value.trim();
   return p;
 }
 function syncLabels(){
@@ -336,6 +372,18 @@ $('btnBrowse').onclick = async () => {
   }catch(err){ msg(err.message,'err'); }
   finally{ $('btnBrowse').disabled = false; }
 };
+
+$('btnRef').onclick = async () => {
+  $('btnRef').disabled = true;
+  try{
+    const r = await fetch('/api/browse',{method:'POST'});
+    const j = await r.json();
+    if(j.ok){ $('style_reference').value = j.path; schedule(); }
+    else if(!j.cancelled){ msg(j.error,'err'); }
+  }catch(err){ msg(err.message,'err'); }
+  finally{ $('btnRef').disabled = false; }
+};
+$('style_reference').addEventListener('change', schedule);
 
 $('btnUpload').onclick = () => $('fileInput').click();
 $('fileInput').addEventListener('change', e => {

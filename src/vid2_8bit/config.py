@@ -25,6 +25,33 @@ TIERS = ("fast", "quality")
 
 
 @dataclass
+class ToneConfig:
+    """Stage 0.5 -- tone mapping and colour grading, before stylization.
+
+    Cinematic footage is graded for a display, not for quantization: a night
+    exterior may use only a third of the lightness range, all bunched in the
+    shadows. Quantizing that directly produces a muddy blob. See stages/tone.py.
+    """
+
+    enabled: bool = True
+    # Stretch lightness percentiles across the full range.
+    auto_levels: bool = True
+    black_point: float = 1.0
+    white_point: float = 99.0
+    gamma: float = 1.0
+    saturation: float = 1.0
+    # Ceiling on the auto-levels lift. The applied amount scales down when the
+    # source already uses most of the range, so daylight shots are not blown out.
+    levels_strength: float = 1.0
+    target_range: float = 0.85
+    # Two-pole S-curve strength. The decisive control for night exteriors.
+    contrast: float = 0.0
+    # Style reference image; its colour statistics are transferred onto frames.
+    reference: str | None = None
+    transfer_strength: float = 0.0
+
+
+@dataclass
 class AbstractConfig:
     """Stage 1 -- pre-abstraction. The stage that removes pixelation noise."""
 
@@ -71,7 +98,7 @@ class SampleConfig:
     # Exactly one of cell_size / target_width drives the grid.
     cell_size: int | None = 6
     target_width: int | None = None
-    # area | outline_expand | superpixel
+    # area | median | outline_expand | superpixel
     method: str = "outline_expand"
     # Outline-expansion window as a multiple of cell size (PixelOE-style).
     expand_radius: float = 1.0
@@ -83,11 +110,13 @@ class SampleConfig:
 class PaletteConfig:
     """Stage 4 -- palette derivation."""
 
-    # auto | hardware | custom
+    # auto | hardware | custom | reference
     mode: str = "auto"
     size: int = 16
     hardware: str | None = None
     custom_path: str | None = None
+    # For mode="reference": fit the palette to this image's actual colours.
+    reference: str | None = None
     # Snap final colors to a reduced channel depth, e.g. [5, 5, 5] for SNES.
     bits_per_channel: list[int] | None = None
     # Frames sampled across a shot when fitting an auto palette.
@@ -96,6 +125,15 @@ class PaletteConfig:
     sample_pixels: int = 20000
     # Weight given to saturated colors so small vivid accents survive k-means.
     chroma_weight: float = 1.0
+    # Place palette entries at the source's own luminance percentiles, so each
+    # gets a roughly equal share of pixels. Fixes both the "16 colours that read
+    # as one" collapse and the opposite failure of spreading a ramp uniformly
+    # across tones the shot does not contain. See palette.redistribute_lightness.
+    redistribute: float = 0.0
+    # Hold chroma toward the bright end of the ramp instead of greying out.
+    warm_highlights: float = 0.0
+    # Force the darkest entry to a true ink and the lightest to a specular.
+    anchor_ink: bool = False
 
 
 @dataclass
@@ -159,6 +197,7 @@ class Config:
 
     tier: str = "quality"
     preset_name: str | None = None
+    tone: ToneConfig = field(default_factory=ToneConfig)
     abstract: AbstractConfig = field(default_factory=AbstractConfig)
     structure: StructureConfig = field(default_factory=StructureConfig)
     sample: SampleConfig = field(default_factory=SampleConfig)
@@ -191,17 +230,19 @@ class Config:
     def validate(self) -> None:
         if self.tier not in TIERS:
             raise ValueError(f"tier must be one of {TIERS}, got {self.tier!r}")
-        if self.palette.mode not in ("auto", "hardware", "custom"):
+        if self.palette.mode not in ("auto", "hardware", "custom", "reference"):
             raise ValueError(f"unknown palette mode {self.palette.mode!r}")
         if self.palette.mode == "hardware" and not self.palette.hardware:
             raise ValueError("palette.mode='hardware' requires palette.hardware")
         if self.palette.mode == "custom" and not self.palette.custom_path:
             raise ValueError("palette.mode='custom' requires palette.custom_path")
+        if self.palette.mode == "reference" and not self.palette.reference:
+            raise ValueError("palette.mode='reference' requires palette.reference")
         if self.sample.cell_size is None and self.sample.target_width is None:
             raise ValueError("set one of sample.cell_size or sample.target_width")
         if self.palette.size < 2:
             raise ValueError("palette.size must be >= 2")
-        if self.sample.method not in ("area", "outline_expand", "superpixel"):
+        if self.sample.method not in ("area", "median", "outline_expand", "superpixel"):
             raise ValueError(f"unknown sample method {self.sample.method!r}")
         if self.dither.mode not in (
             "none", "bayer2", "bayer4", "bayer8", "bluenoise", "floyd"

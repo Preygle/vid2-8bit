@@ -48,6 +48,8 @@ VIDEO_SUFFIXES = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v"}
 PALETTE_KEYS = (
     "preset", "source", "frame", "palette_mode", "palette_size",
     "hardware_palette", "bits", "texture_removal", "luma_bands", "saturation",
+    "redistribute", "anchor_ink", "style_reference",
+    "contrast", "levels_strength", "tone_gamma", "transfer_strength",
 )
 
 
@@ -107,6 +109,15 @@ def config_from_params(params: dict):
         preset = None
 
     overrides: dict = {
+        "tone": {
+            "enabled": _b(params, "tone_enabled", True),
+            "auto_levels": _b(params, "auto_levels", True),
+            "levels_strength": _f(params, "levels_strength", 1.0),
+            "contrast": _f(params, "contrast", 0.0),
+            "gamma": _f(params, "tone_gamma", 1.0),
+            "saturation": _f(params, "tone_saturation", 1.0),
+            "transfer_strength": _f(params, "transfer_strength", 0.0),
+        },
         "abstract": {
             "texture_removal": _f(params, "texture_removal", 0.35),
             "luma_bands": _i(params, "luma_bands", 0),
@@ -120,13 +131,14 @@ def config_from_params(params: dict):
             "snap_lines": _b(params, "snap_lines", False),
         },
         "sample": {
-            "cell_size": max(1, _i(params, "cell_size", 6)),
             "method": params.get("sample_method", "outline_expand"),
             "contrast_weight": _f(params, "contrast_weight", 0.7),
         },
         "palette": {
             "mode": params.get("palette_mode", "auto"),
             "size": max(2, _i(params, "palette_size", 24)),
+            "redistribute": _f(params, "redistribute", 0.0),
+            "anchor_ink": _b(params, "anchor_ink", False),
         },
         "dither": {
             "mode": params.get("dither_mode", "none"),
@@ -138,8 +150,26 @@ def config_from_params(params: dict):
         "output": {"crt": _b(params, "crt", False)},
     }
 
+    # Grid: logical width wins when set, otherwise cell size. Sending both would
+    # silently override a preset that defines its geometry as a target width.
+    tw = _i(params, "target_width", 0)
+    if tw > 0:
+        overrides["sample"]["target_width"] = tw
+        overrides["sample"]["cell_size"] = None
+    else:
+        overrides["sample"]["cell_size"] = max(1, _i(params, "cell_size", 6))
+        overrides["sample"]["target_width"] = None
+
     if overrides["palette"]["mode"] == "hardware":
         overrides["palette"]["hardware"] = params.get("hardware_palette") or "nes"
+    # A style reference drives both the grade and, optionally, the palette.
+    ref = (params.get("style_reference") or "").strip()
+    if ref:
+        overrides["tone"]["reference"] = ref
+        if overrides["palette"]["mode"] == "reference":
+            overrides["palette"]["reference"] = ref
+    elif overrides["palette"]["mode"] == "reference":
+        overrides["palette"]["mode"] = "auto"
 
     bits = (params.get("bits") or "").strip()
     if bits and bits.lower() not in ("none", "off", "8-8-8"):
@@ -535,7 +565,8 @@ class Handler(BaseHTTPRequestHandler):
             if route == "/api/preset":
                 cfg = build_config(query.get("name") or "base")
                 return self._json({"ok": True, "config": {
-                    "cell_size": cfg.sample.cell_size,
+                    "cell_size": cfg.sample.cell_size or 6,
+                    "target_width": cfg.sample.target_width or 0,
                     "sample_method": cfg.sample.method,
                     "contrast_weight": cfg.sample.contrast_weight,
                     "palette_mode": cfg.palette.mode,
@@ -554,6 +585,14 @@ class Handler(BaseHTTPRequestHandler):
                     "dither_mode": cfg.dither.mode,
                     "dither_amount": cfg.dither.amount,
                     "selective_threshold": cfg.dither.selective_threshold,
+                    "redistribute": cfg.palette.redistribute,
+                    "anchor_ink": cfg.palette.anchor_ink,
+                    "contrast": cfg.tone.contrast,
+                    "levels_strength": cfg.tone.levels_strength,
+                    "tone_gamma": cfg.tone.gamma,
+                    "tone_saturation": cfg.tone.saturation,
+                    "transfer_strength": cfg.tone.transfer_strength,
+                    "auto_levels": cfg.tone.auto_levels,
                     "tiles": cfg.tiles.enabled,
                     "crt": cfg.output.crt,
                 }})

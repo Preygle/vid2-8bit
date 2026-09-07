@@ -30,3 +30,7 @@ models/
 # Local machine config
 config.local.yaml
 .env
+
+# Reference frames and working renders from style fitting
+in/
+work/

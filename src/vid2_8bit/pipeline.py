@@ -28,6 +28,7 @@ from .stages import abstract as abstract_mod
 from .stages import output as output_mod
 from .stages import sample as sample_mod
 from .stages import structure as structure_mod
+from .stages import tone as tone_mod
 from .stages.temporal import TemporalState, decimate_plan
 
 log = logging.getLogger(__name__)
@@ -150,9 +151,16 @@ class Converter:
         for frame in frames:
             img = u8_to_float(frame)
             # Fit to *abstracted* colors: that is what will actually be
-            # quantized, and raw footage contains texture colors that the
+            # quantized, and raw footage contains texture colours that the
             # abstraction stage removes before quantization ever sees them.
-            img = abstract_mod.abstract_frame(img, self.cfg, cell=3.0, tier="fast")
+            #
+            # The cell must match what the render will actually use, scaled for
+            # the reduced sampling resolution. Fitting at a hardcoded cell fitted
+            # the palette to colours the renderer never produces, which showed up
+            # as hue contamination on flat regions.
+            cell = self.cfg.effective_cell(frame.shape[1], frame.shape[0])
+            img = tone_mod.apply_tone(img, self.cfg)
+            img = abstract_mod.abstract_frame(img, self.cfg, cell, tier=self.cfg.tier)
             flat = img.reshape(-1, 3)
             n = min(per_frame, len(flat))
             chunks.append(flat[rng.choice(len(flat), size=n, replace=False)])
@@ -175,6 +183,10 @@ class Converter:
         cell = cfg.effective_cell(src_w, src_h)
 
         depth = self.assist.depth(frame_index) if cfg.structure.depth_gated else None
+
+        # Stage 0.5 -- tone and grade. Must precede abstraction: L0 needs real
+        # contrast to find edges in, and k-means needs a spread of colours.
+        img = tone_mod.apply_tone(img, cfg)
 
         # Stage 1 -- abstraction at source resolution.
         abstracted = abstract_mod.abstract_frame(img, cfg, cell, tier=cfg.tier)

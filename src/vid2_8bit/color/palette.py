@@ -264,6 +264,83 @@ def fit_palette(
 # -- top-level -------------------------------------------------------------
 
 
+def redistribute_lightness(
+    palette_srgb: np.ndarray,
+    source_L: np.ndarray,
+    strength: float = 1.0,
+    anchor_ink: bool = False,
+) -> np.ndarray:
+    """Place palette lightness at the source's own luminance percentiles.
+
+    Two failed approaches led here, both found by blind critique against the
+    film reference.
+
+    Fitting by k-means alone gave entries 0.02 apart in lightness -- nominally
+    16 colours, visually one muddy tone. So the first fix forced a uniform
+    minimum gap. That was worse: it spread the ramp evenly across the whole
+    0..1 range while the actual content of a night exterior lives between
+    roughly L 0.08 and 0.25. Half the palette then described tones the shot does
+    not contain, and everything the shot *does* contain collapsed into a single
+    entry covering 72% of the frame, with a fourteen-unit hole beneath it.
+
+    Placing entry *i* at the source's own (i+0.5)/N percentile fixes both at
+    once: every entry lands on tones that exist, each gets a roughly equal share
+    of pixels, and the steps are automatically closer together where the image
+    has detail. It is histogram equalization applied to the palette rather than
+    to the image, so contrast comes from *spending* the ramp rather than from
+    stretching pixels.
+    """
+    from .spaces import oklab_to_srgb
+
+    n = len(palette_srgb)
+    if n < 2 or strength <= 0.0:
+        return palette_srgb
+
+    lab = srgb_to_oklab(palette_srgb)
+    order = np.argsort(lab[:, 0])
+    lab = lab[order]
+
+    flat = np.asarray(source_L, dtype=np.float32).reshape(-1)
+    if flat.size > 400000:
+        flat = flat[:: max(1, flat.size // 400000)]
+    targets = np.percentile(flat, (np.arange(n) + 0.5) / n * 100.0)
+    targets = np.maximum.accumulate(targets)
+
+    if anchor_ink:
+        # Keep a true ink and a specular so the frame still has poles, but do
+        # not stretch everything between them -- that was the previous mistake.
+        targets[0] = min(targets[0], float(np.percentile(flat, 0.5)) * 0.5)
+        targets[-1] = max(targets[-1], float(np.percentile(flat, 99.5)))
+
+    a = float(np.clip(strength, 0.0, 1.0))
+    lab[:, 0] = lab[:, 0] * (1.0 - a) + targets.astype(np.float32) * a
+    return np.ascontiguousarray(oklab_to_srgb(lab), dtype=np.float32)
+
+
+def warm_highlights(palette_srgb: np.ndarray, amount: float = 0.0) -> np.ndarray:
+    """Keep chroma in the bright end of the ramp.
+
+    Critique against the film reference: our highlights desaturated to neutral
+    grey (S=13) while the reference rotates warm as it brightens and holds
+    saturation to the top (p90 S=215). A ramp that goes colourless at the top
+    reads as a photograph averaged down, not as authored art.
+    """
+    from .spaces import oklab_to_srgb
+
+    if amount <= 0.0:
+        return palette_srgb
+    lab = srgb_to_oklab(palette_srgb)
+    L = lab[:, 0]
+    lo, hi = float(L.min()), float(L.max())
+    t = (L - lo) / max(hi - lo, 1e-6)          # 0 at ink, 1 at specular
+    boost = 1.0 + amount * t
+    lab[:, 1] *= boost                          # a: toward warm
+    lab[:, 2] *= boost
+    lab[:, 1] += amount * 0.02 * t              # a small deliberate warm bias
+    lab[:, 2] += amount * 0.03 * t
+    return np.ascontiguousarray(oklab_to_srgb(lab), dtype=np.float32)
+
+
 def build_palette(cfg, samples_srgb: np.ndarray | None = None) -> np.ndarray:
     """Resolve a PaletteConfig into concrete colors, shape (N, 3) float sRGB."""
     pcfg = cfg.palette
@@ -273,11 +350,22 @@ def build_palette(cfg, samples_srgb: np.ndarray | None = None) -> np.ndarray:
             pal = select_subset(pal, samples_srgb, pcfg.size)
     elif pcfg.mode == "custom":
         pal = load_palette_file(pcfg.custom_path)
+    elif pcfg.mode == "reference":
+        from ..stages.tone import palette_from_reference
+
+        pal = palette_from_reference(pcfg.reference, pcfg.size, pcfg.chroma_weight)
     else:
         if samples_srgb is None or len(samples_srgb) == 0:
             raise ValueError("auto palette requires sample pixels")
         pal = fit_palette(samples_srgb, pcfg.size, pcfg.chroma_weight)
 
+    if (pcfg.redistribute > 0.0 or pcfg.anchor_ink) and samples_srgb is not None:
+        pal = redistribute_lightness(
+            pal, srgb_to_oklab(np.asarray(samples_srgb, np.float32))[..., 0],
+            pcfg.redistribute, pcfg.anchor_ink,
+        )
+    if pcfg.warm_highlights > 0.0:
+        pal = warm_highlights(pal, pcfg.warm_highlights)
     if pcfg.bits_per_channel:
         pal = snap_to_bit_depth(pal, pcfg.bits_per_channel)
     pal = dedupe(pal)
