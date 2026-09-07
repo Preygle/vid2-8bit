@@ -49,6 +49,10 @@ palette:
   redistribute: 1.0
   warm_highlights: 0.35
   anchor_ink: true
+  # Removes isolated cells that sit close to their neighbours (blurred gradient
+  # wobbling across a threshold) while keeping high-contrast islands, so lit
+  # windows survive and facade speckle does not.
+  despeckle: 0.09
 
 abstract:
   enabled: true

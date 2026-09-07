@@ -19,6 +19,7 @@ from .assist import NULL_CACHE, AssistCache
 from .metrics import isolated_pixel_ratio, temporal_churn
 from .color import dither as dither_mod
 from .color import palette as palette_mod
+from .color import despeckle as despeckle_mod
 from .color import tiles as tiles_mod
 from .color.quantize import Quantizer, snap_image_bit_depth
 from .color.spaces import float_to_u8, u8_to_float
@@ -221,6 +222,10 @@ class Converter:
 
         # Stage 4 -- dither then quantize.
         idx = self._quantize(logical, state, offset)
+        if cfg.palette.despeckle > 0.0:
+            idx = despeckle_mod.despeckle_indices(
+                idx, state.quantizer.palette_lab, cfg.palette.despeckle
+            )
         if self.collect_metrics:
             self.stats.noise_samples.append(isolated_pixel_ratio(idx))
             prev = state.temporal.prev_idx

@@ -264,6 +264,67 @@ def fit_palette(
 # -- top-level -------------------------------------------------------------
 
 
+def ramp_palette(
+    size: int = 12,
+    shadow_hue: float = 210.0,
+    mid_hue: float = 350.0,
+    highlight_hue: float = 45.0,
+    shadow_chroma: float = 0.075,
+    mid_chroma: float = 0.065,
+    highlight_chroma: float = 0.030,
+    l_min: float = 0.05,
+    l_max: float = 0.95,
+) -> np.ndarray:
+    """Build an authored ramp instead of clustering the frame.
+
+    Blind critique against the film reference kept returning to the same thing:
+    a palette fitted to a photograph's histogram inherits that photograph's
+    problems. On a night exterior it spends four slots on mutually
+    indistinguishable darks, then goes dead neutral as it brightens (measured
+    saturation 0.01-0.06 in our highlights against 0.30-0.33 held right across
+    the reference's range), so everything separates by luminance alone and the
+    frame reads as one undifferentiated mass.
+
+    The reference does the opposite: it separates by *hue* at similar luminance
+    -- saturated ink-teal shadows, a maroon midtone family, warm highlights --
+    which is what lets a viewer read buildings apart in a dark frame at all.
+
+    So this generates the ramp rather than discovering it: even lightness
+    spacing, and a deliberate hue path from cool saturated shadow through warm
+    mid to near-neutral highlight. Pair it with `redistribute_lightness` to slide
+    the ramp onto the tones a given shot actually contains.
+    """
+    from .spaces import oklab_to_srgb
+
+    n = max(2, int(size))
+    t = np.linspace(0.0, 1.0, n, dtype=np.float32)
+    L = l_min + (l_max - l_min) * t
+
+    # Piecewise hue and chroma path: shadow -> mid at t=0.5 -> highlight.
+    lower = np.clip(t * 2.0, 0.0, 1.0)
+    upper = np.clip((t - 0.5) * 2.0, 0.0, 1.0)
+    # Hue is an angle, so interpolate along the shortest arc. Interpolating the
+    # raw degrees sends 350 -> 45 the long way round through green, which puts a
+    # cyan band in the middle of what should be a warm ramp.
+    def _arc(a: float, b: float) -> float:
+        return (b - a + 180.0) % 360.0 - 180.0
+
+    hue = np.where(
+        t < 0.5,
+        shadow_hue + _arc(shadow_hue, mid_hue) * lower,
+        mid_hue + _arc(mid_hue, highlight_hue) * upper,
+    ) % 360.0
+    chroma = np.where(
+        t < 0.5,
+        shadow_chroma + (mid_chroma - shadow_chroma) * lower,
+        mid_chroma + (highlight_chroma - mid_chroma) * upper,
+    )
+
+    rad = np.deg2rad(hue)
+    lab = np.stack([L, chroma * np.cos(rad), chroma * np.sin(rad)], axis=-1)
+    return np.ascontiguousarray(oklab_to_srgb(lab.astype(np.float32)), dtype=np.float32)
+
+
 def redistribute_lightness(
     palette_srgb: np.ndarray,
     source_L: np.ndarray,
@@ -350,6 +411,13 @@ def build_palette(cfg, samples_srgb: np.ndarray | None = None) -> np.ndarray:
             pal = select_subset(pal, samples_srgb, pcfg.size)
     elif pcfg.mode == "custom":
         pal = load_palette_file(pcfg.custom_path)
+    elif pcfg.mode == "ramp":
+        pal = ramp_palette(
+            pcfg.size,
+            shadow_hue=pcfg.shadow_hue,
+            mid_hue=pcfg.mid_hue,
+            highlight_hue=pcfg.highlight_hue,
+        )
     elif pcfg.mode == "reference":
         from ..stages.tone import palette_from_reference
 

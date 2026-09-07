@@ -110,7 +110,7 @@ class SampleConfig:
 class PaletteConfig:
     """Stage 4 -- palette derivation."""
 
-    # auto | hardware | custom | reference
+    # auto | hardware | custom | reference | ramp
     mode: str = "auto"
     size: int = 16
     hardware: str | None = None
@@ -132,6 +132,15 @@ class PaletteConfig:
     redistribute: float = 0.0
     # Hold chroma toward the bright end of the ramp instead of greying out.
     warm_highlights: float = 0.0
+    # For mode="ramp": the authored hue path, in degrees around Oklab.
+    # Cool saturated shadow -> warm mid -> near-neutral highlight.
+    shadow_hue: float = 210.0
+    mid_hue: float = 350.0
+    highlight_hue: float = 45.0
+    # Remove isolated single cells that sit close to their neighbours (blurred
+    # gradient wobbling across a threshold), while keeping high-contrast islands
+    # such as lit windows. Oklab distance; 0 disables.
+    despeckle: float = 0.0
     # Force the darkest entry to a true ink and the lightest to a specular.
     anchor_ink: bool = False
 
@@ -230,7 +239,7 @@ class Config:
     def validate(self) -> None:
         if self.tier not in TIERS:
             raise ValueError(f"tier must be one of {TIERS}, got {self.tier!r}")
-        if self.palette.mode not in ("auto", "hardware", "custom", "reference"):
+        if self.palette.mode not in ("auto", "hardware", "custom", "reference", "ramp"):
             raise ValueError(f"unknown palette mode {self.palette.mode!r}")
         if self.palette.mode == "hardware" and not self.palette.hardware:
             raise ValueError("palette.mode='hardware' requires palette.hardware")
