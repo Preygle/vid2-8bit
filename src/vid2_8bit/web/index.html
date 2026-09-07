@@ -234,6 +234,14 @@
     <legend>Output</legend>
     <div class="check"><input type="checkbox" id="crt"><label for="crt">CRT scanlines</label></div>
     <div class="check"><input type="checkbox" id="temporal" checked><label for="temporal">Temporal stabilization (video)</label></div>
+    <label>Animation rate &mdash; how often the picture changes (0 = source)</label>
+    <div class="row"><input type="range" id="decimate_fps" min="0" max="30" step="1" value="0"><span class="val" id="decimate_fpsV">0</span></div>
+    <div class="hint">8&ndash;15 is the period&#8209;accurate range. Stepping the motion is a large part of why pixel art reads as pixel art.</div>
+    <label>Output file frame rate (0 = keep source and duplicate held frames)</label>
+    <div class="row"><input type="range" id="output_fps" min="0" max="60" step="1" value="0"><span class="val" id="output_fpsV">0</span></div>
+    <label>Speed &mdash; working resolution as a multiple of output width</label>
+    <div class="row"><input type="range" id="oversample" min="0" max="16" step="1" value="6"><span class="val" id="oversampleV">6</span></div>
+    <div class="hint">Lower is faster. 6 is visually identical to full resolution; below 3 starts losing fine texture.</div>
     <label>Preview quality</label>
     <select id="tier"><option value="fast">fast &ndash; responsive</option><option value="quality">quality &ndash; slow</option></select>
     <label>Preview width (px)</label>

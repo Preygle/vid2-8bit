@@ -57,25 +57,30 @@ def auto_levels(
     considered "already fine".
     """
     lab = srgb_to_oklab(img_srgb)
+    _levels_in_place(lab, black_point, white_point, gamma, strength, target_range)
+    return oklab_to_srgb(lab)
+
+
+def _levels_in_place(lab, black_point, white_point, gamma, strength, target_range):
+    """Auto-levels applied directly to an Oklab array. See auto_levels()."""
     L = lab[..., 0]
     lo = float(np.percentile(L, black_point))
     hi = float(np.percentile(L, white_point))
     span = hi - lo
     if span < 1e-6 or strength <= 0.0:
-        return img_srgb
+        return
 
     # 0 when the image already spans target_range, rising as it gets flatter.
     need = float(np.clip((target_range - span) / max(target_range, 1e-6), 0.0, 1.0))
     amount = float(np.clip(strength, 0.0, 1.0)) * need
     if amount < 1e-3 and abs(gamma - 1.0) < 1e-3:
-        return img_srgb
+        return
 
     stretched = np.clip((L - lo) / span, 0.0, 1.0)
-    blended = L * (1.0 - amount) + stretched * amount
+    blended = L * np.float32(1.0 - amount) + stretched * np.float32(amount)
     if abs(gamma - 1.0) > 1e-3:
-        blended = np.clip(blended, 0.0, 1.0) ** float(gamma)
+        blended = np.clip(blended, 0.0, 1.0) ** np.float32(gamma)
     lab[..., 0] = blended
-    return oklab_to_srgb(lab)
 
 
 def two_pole_contrast(img_srgb: np.ndarray, amount: float = 0.0) -> np.ndarray:
@@ -94,11 +99,18 @@ def two_pole_contrast(img_srgb: np.ndarray, amount: float = 0.0) -> np.ndarray:
     if amount <= 0.0:
         return img_srgb
     lab = srgb_to_oklab(img_srgb)
-    L = np.clip(lab[..., 0], 0.0, 1.0)
-    s_curve = L * L * (3.0 - 2.0 * L)          # smoothstep
-    a = float(np.clip(amount, 0.0, 1.0))
-    lab[..., 0] = L * (1.0 - a) + s_curve * a
+    _contrast_in_place(lab, amount)
     return oklab_to_srgb(lab)
+
+
+def _contrast_in_place(lab, amount: float) -> None:
+    """Two-pole S-curve applied directly to an Oklab array."""
+    if amount <= 0.0:
+        return
+    L = np.clip(lab[..., 0], 0.0, 1.0)
+    s_curve = L * L * (np.float32(3.0) - np.float32(2.0) * L)   # smoothstep
+    a = np.float32(np.clip(amount, 0.0, 1.0))
+    lab[..., 0] = L * (np.float32(1.0) - a) + s_curve * a
 
 
 def image_stats(img_srgb: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -143,10 +155,22 @@ def color_transfer(
     if strength <= 0.0:
         return img_srgb
     lab = srgb_to_oklab(img_srgb)
-    src_mean, src_std = image_stats(img_srgb)
-    shifted = (lab - src_mean) * (ref_std / src_std) + ref_mean
-    s = float(np.clip(strength, 0.0, 1.0))
-    return oklab_to_srgb(lab * (1.0 - s) + shifted * s)
+    _transfer_in_place(lab, ref_mean, ref_std, strength)
+    return oklab_to_srgb(lab)
+
+
+def _transfer_in_place(lab, ref_mean, ref_std, strength: float) -> None:
+    """Reinhard transfer applied directly to an Oklab array."""
+    if strength <= 0.0:
+        return
+    flat = lab.reshape(-1, 3)
+    src_mean = flat.mean(axis=0)
+    src_std = flat.std(axis=0) + 1e-6
+    s = np.float32(np.clip(strength, 0.0, 1.0))
+    scale = (ref_std / src_std).astype(np.float32)
+    shifted = (lab - src_mean) * scale + ref_mean
+    lab *= np.float32(1.0) - s
+    lab += shifted * s
 
 
 def apply_tone(img_srgb: np.ndarray, cfg) -> np.ndarray:
@@ -155,24 +179,32 @@ def apply_tone(img_srgb: np.ndarray, cfg) -> np.ndarray:
     if tcfg is None or not tcfg.enabled:
         return img_srgb
 
-    out = img_srgb
+    needs = (
+        tcfg.auto_levels
+        or tcfg.contrast > 0.0
+        or (tcfg.reference and tcfg.transfer_strength > 0.0)
+        or abs(tcfg.saturation - 1.0) > 1e-3
+    )
+    if not needs:
+        return img_srgb
+
+    # ONE Oklab round trip for the whole stage. Each conversion costs roughly
+    # 200ms on an HD frame, and doing levels, contrast, transfer and saturation
+    # as separate sRGB-level calls meant six of them per frame -- profiling put
+    # colour conversion at about 70% of total render time, most of it here.
+    lab = srgb_to_oklab(img_srgb)
+
     if tcfg.auto_levels:
-        out = auto_levels(out, tcfg.black_point, tcfg.white_point,
-                          tcfg.gamma, tcfg.levels_strength, tcfg.target_range)
-
-    if tcfg.contrast > 0.0:
-        out = two_pole_contrast(out, tcfg.contrast)
-
+        _levels_in_place(lab, tcfg.black_point, tcfg.white_point, tcfg.gamma,
+                         tcfg.levels_strength, tcfg.target_range)
+    _contrast_in_place(lab, tcfg.contrast)
     if tcfg.reference and tcfg.transfer_strength > 0.0:
         mean, std = reference_stats(tcfg.reference)
-        out = color_transfer(out, mean, std, tcfg.transfer_strength)
-
+        _transfer_in_place(lab, mean, std, tcfg.transfer_strength)
     if abs(tcfg.saturation - 1.0) > 1e-3:
-        lab = srgb_to_oklab(out)
-        lab[..., 1:] *= float(tcfg.saturation)
-        out = oklab_to_srgb(lab)
+        lab[..., 1:] *= np.float32(tcfg.saturation)
 
-    return np.clip(out, 0.0, 1.0).astype(np.float32)
+    return oklab_to_srgb(lab)
 
 
 def palette_from_reference(path: str | Path, size: int, chroma_weight: float = 1.0):

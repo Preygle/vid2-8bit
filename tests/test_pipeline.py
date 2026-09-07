@@ -495,6 +495,38 @@ class TestDespeckle:
         assert np.array_equal(despeckle.despeckle_indices(idx, lab, 0.0), idx)
 
 
+class TestPerformance:
+    def test_prescale_reduces_resolution_but_not_output_size(self):
+        """Output size must not depend on the speed setting."""
+        from vid2_8bit.pipeline import Converter
+
+        cfg = build_config(overrides={
+            "sample": {"cell_size": None, "target_width": 100},
+            "performance": {"oversample": 4.0},
+        })
+        conv = Converter(cfg, collect_metrics=False)
+        frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        assert conv._prescale(frame, 100).shape[1] == 400
+        # oversample 0 disables it entirely.
+        cfg2 = build_config(overrides={"performance": {"oversample": 0.0}})
+        assert Converter(cfg2)._prescale(frame, 100).shape[1] == 1920
+
+    def test_prescale_skips_when_there_is_nothing_to_save(self):
+        from vid2_8bit.pipeline import Converter
+
+        cfg = build_config(overrides={"performance": {"oversample": 6.0}})
+        conv = Converter(cfg, collect_metrics=False)
+        small = np.zeros((90, 160, 3), dtype=np.uint8)
+        assert conv._prescale(small, 100).shape[1] == 160
+
+    def test_fps_config_accepts_both_rates(self):
+        cfg = build_config(overrides={
+            "temporal": {"decimate_fps": 12.0}, "output": {"fps": 12.0},
+        })
+        cfg.validate()
+        assert cfg.temporal.decimate_fps == 12.0 and cfg.output.fps == 12.0
+
+
 # -- metrics ---------------------------------------------------------------
 
 

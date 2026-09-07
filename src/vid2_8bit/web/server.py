@@ -146,8 +146,16 @@ def config_from_params(params: dict):
             "selective_threshold": _f(params, "selective_threshold", 0.02),
         },
         "tiles": {"enabled": _b(params, "tiles", False)},
-        "temporal": {"enabled": _b(params, "temporal", True)},
-        "output": {"crt": _b(params, "crt", False)},
+        "temporal": {
+            "enabled": _b(params, "temporal", True),
+            "decimate_fps": _f(params, "decimate_fps", 0.0),
+        },
+        "output": {"crt": _b(params, "crt", False),
+                   "fps": _f(params, "output_fps", 0.0)},
+        "performance": {
+            "oversample": _f(params, "oversample", 6.0),
+            "workers": _i(params, "workers", 0),
+        },
     }
 
     # Grid: logical width wins when set, otherwise cell size. Sending both would
@@ -593,6 +601,9 @@ class Handler(BaseHTTPRequestHandler):
                     "tone_saturation": cfg.tone.saturation,
                     "transfer_strength": cfg.tone.transfer_strength,
                     "auto_levels": cfg.tone.auto_levels,
+                    "decimate_fps": cfg.temporal.decimate_fps,
+                    "output_fps": cfg.output.fps,
+                    "oversample": cfg.performance.oversample,
                     "tiles": cfg.tiles.enabled,
                     "crt": cfg.output.crt,
                 }})

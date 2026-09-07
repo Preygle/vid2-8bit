@@ -182,7 +182,10 @@ class TemporalConfig:
     hysteresis: float = 0.015
     # Snap the pixel grid to integer offsets tracking camera motion.
     grid_anchor: bool = True
-    # Render at this fps and hold frames (0 = keep source rate).
+    # Animation rate: how often the picture actually changes, in fps.
+    # 0 keeps the source rate. 8-15 is the period-accurate range -- 8-bit games
+    # could not animate faster, and stepping the motion is a large part of why
+    # pixel art reads as pixel art rather than as a filtered video.
     decimate_fps: float = 0.0
 
 
@@ -194,10 +197,31 @@ class OutputConfig:
     scale: int | None = None
     crt: bool = False
     scanline_strength: float = 0.25
+    # Container frame rate. 0 keeps the source rate and duplicates held frames,
+    # so the file is e.g. 24fps showing 12 distinct images per second. Setting
+    # it writes a genuinely low-rate file instead -- smaller, and what most
+    # people mean by "export at 12fps". Pair it with temporal.decimate_fps.
+    fps: float = 0.0
     pix_fmt: str = "yuv444p"
     crf: int = 12
     codec: str = "libx264"
     preset: str = "slow"
+
+
+@dataclass
+class PerformanceConfig:
+    """Speed controls that trade a little fidelity for a lot of time."""
+
+    # Work at (logical_width * oversample) rather than full source resolution.
+    # A 1920-wide source rendering to a 180-wide grid spends 99% of its pixel
+    # budget on detail that cannot survive sampling; profiling showed tone and
+    # outline expansion dominating purely because they ran at 1920x1080.
+    # 0 disables and uses the full source. 4-8 is visually indistinguishable.
+    oversample: float = 6.0
+    # Worker processes for the parallelizable per-frame stages. 0 = auto,
+    # 1 = sequential. Temporal state stays in the main process and is applied
+    # in order, so results do not depend on worker count.
+    workers: int = 0
 
 
 @dataclass
@@ -215,6 +239,7 @@ class Config:
     tiles: TilesConfig = field(default_factory=TilesConfig)
     temporal: TemporalConfig = field(default_factory=TemporalConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    performance: PerformanceConfig = field(default_factory=PerformanceConfig)
     # Directory holding assist sidecar caches, if any were produced elsewhere.
     assist_cache: str | None = None
 

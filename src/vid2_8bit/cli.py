@@ -38,6 +38,9 @@ def _build_overrides(args) -> dict:
     put("structure", "outlines", args.outlines)
     put("temporal", "enabled", args.temporal)
     put("temporal", "decimate_fps", args.decimate_fps)
+    put("output", "fps", args.fps)
+    put("performance", "oversample", args.oversample)
+    put("performance", "workers", args.workers)
     put("output", "scale", args.scale)
     put("output", "crt", args.crt)
     put("output", "pix_fmt", args.pix_fmt)
@@ -90,7 +93,14 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--no-outlines", dest="outlines", action="store_false", default=None)
     p.add_argument("--no-temporal", dest="temporal", action="store_false", default=None)
     p.add_argument("--decimate-fps", type=float, default=None,
-                   help="render on twos/threes, e.g. 12 or 15")
+                   help="animation rate: how often the picture changes (e.g. 12)")
+    p.add_argument("--fps", type=float, default=None,
+                   help="container frame rate of the output file (e.g. 12). "
+                        "Without this, held frames are duplicated at the source rate.")
+    p.add_argument("--oversample", type=float, default=None,
+                   help="work at logical_width*N instead of full res (default 6, 0 = off)")
+    p.add_argument("--workers", type=int, default=None,
+                   help="render threads (0 = auto)")
     p.add_argument("--scale", type=int, default=None, help="integer upscale factor")
     p.add_argument("--crt", action="store_true", default=None)
     p.add_argument("--pix-fmt", default=None)

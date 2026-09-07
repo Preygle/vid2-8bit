@@ -8,7 +8,10 @@ scoping right is most of what separates this from a per-frame filter.
 from __future__ import annotations
 
 import logging
+import os
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -178,10 +181,38 @@ class Converter:
     ) -> np.ndarray:
         """Convert one source frame. Returns uint8 RGB at delivery resolution."""
         cfg = self.cfg
+        src_h_full, src_w_full = frame_u8.shape[:2]
+        size = cfg.logical_size(src_w_full, src_h_full)
+        offset = state.temporal.grid_offset(u8_to_float(self._prescale(frame_u8, size[0])))
+        logical = self.render_logical(frame_u8, size, offset, frame_index)
+        return self.finish_frame(
+            logical, state, offset, (src_w_full, src_h_full), target_size
+        )
+
+    def render_logical(
+        self,
+        frame_u8: np.ndarray,
+        size: tuple[int, int],
+        offset: tuple[int, int],
+        frame_index: int = 0,
+    ) -> np.ndarray:
+        """Everything with no dependency on other frames, down to the logical grid.
+
+        Split out from render_frame so it can run on a worker thread. It is also
+        the expensive part -- roughly 95% of per-frame cost -- while the
+        sequential remainder (temporal blend, quantize, upscale) works on a tiny
+        180x101 image and costs almost nothing.
+        """
+        cfg = self.cfg
+
+        # Work at a modest multiple of the output grid rather than at full
+        # source resolution. Everything below roughly a quarter of a cell is
+        # removed by sampling regardless, so rendering a 180-wide grid from a
+        # 1920-wide frame spends ~99% of the pixel budget on detail that is
+        # discarded. Costs a little fine texture, saves most of the runtime.
+        frame_u8 = self._prescale(frame_u8, size[0])
         img = u8_to_float(frame_u8)
-        src_h, src_w = img.shape[:2]
-        size = cfg.logical_size(src_w, src_h)
-        cell = cfg.effective_cell(src_w, src_h)
+        cell = img.shape[1] / float(size[0])
 
         depth = self.assist.depth(frame_index) if cfg.structure.depth_gated else None
 
@@ -189,14 +220,11 @@ class Converter:
         # contrast to find edges in, and k-means needs a spread of colours.
         img = tone_mod.apply_tone(img, cfg)
 
-        # Stage 1 -- abstraction at source resolution.
+        # Stage 1 -- abstraction at working resolution.
         abstracted = abstract_mod.abstract_frame(img, cfg, cell, tier=cfg.tier)
 
-        # Stage 2 -- line extraction, also at source resolution.
+        # Stage 2 -- line extraction, also before downsampling.
         lines = structure_mod.extract_lines(abstracted, cfg, depth)
-
-        # Stage 5a -- grid anchoring decides where we sample from.
-        offset = state.temporal.grid_offset(img)
 
         # Stage 3 -- down to the logical grid.
         logical = sample_mod.sample_frame(abstracted, cfg, size, cfg.tier, offset)
@@ -212,6 +240,23 @@ class Converter:
                 cfg.structure.outline_strength,
                 cfg.structure.outline_darken,
             )
+        return logical
+
+    def finish_frame(
+        self,
+        logical: np.ndarray,
+        state: ShotRender,
+        offset: tuple[int, int],
+        full_size: tuple[int, int],
+        target_size: tuple[int, int] | None = None,
+    ) -> np.ndarray:
+        """The sequential remainder: temporal state, quantize, upscale.
+
+        Must run in frame order -- every step here reads state left by the
+        previous frame, which is exactly what makes the output stable.
+        """
+        cfg = self.cfg
+        src_w_full, src_h_full = full_size
 
         # Stage 5b -- temporal blending before quantization, so the quantizer
         # sees an already-stable image.
@@ -234,10 +279,26 @@ class Converter:
         state.temporal.note_indices(idx)
         out = state.quantizer.to_rgb(idx)
 
-        # Stage 6 -- upscale.
-        tw, th = target_size or (src_w, src_h)
+        # Stage 6 -- upscale. Sized from the ORIGINAL frame, so the delivery
+        # resolution does not shift when the performance prescale changes.
+        tw, th = target_size or (src_w_full, src_h_full)
         final = output_mod.finalize(out, cfg, tw, th)
         return float_to_u8(final)
+
+    def _prescale(self, frame_u8: np.ndarray, logical_w: int) -> np.ndarray:
+        """Downscale toward the working resolution before the expensive stages."""
+        over = float(self.cfg.performance.oversample)
+        if over <= 0:
+            return frame_u8
+        target_w = int(max(logical_w * over, logical_w))
+        src_h, src_w = frame_u8.shape[:2]
+        # Only bother when there is real work to save.
+        if target_w >= src_w * 0.9:
+            return frame_u8
+        target_h = max(2, int(round(src_h * target_w / src_w)))
+        return cv2.resize(
+            frame_u8, (target_w, target_h), interpolation=cv2.INTER_AREA
+        )
 
     def _quantize(
         self, logical: np.ndarray, state: ShotRender, offset: tuple[int, int]
@@ -304,6 +365,24 @@ class Converter:
         )
         out_w, out_h = size[0] * scale, size[1] * scale
 
+        # Animation rate (how often the picture changes) and container rate are
+        # separate. Holding at the source rate duplicates frames; setting an
+        # output fps writes a genuinely low-rate file instead.
+        anim_fps = float(cfg.temporal.decimate_fps)
+        out_fps = float(cfg.output.fps)
+        hold_global = 1
+        if anim_fps > 0 and anim_fps < info.fps:
+            hold_global = max(1, int(round(info.fps / anim_fps)))
+        if out_fps > 0:
+            # One written frame per rendered frame; the container carries the rate.
+            writer_fps = out_fps
+            if anim_fps <= 0:
+                hold_global = max(1, int(round(info.fps / out_fps)))
+            duplicate = 1
+        else:
+            writer_fps = info.fps
+            duplicate = hold_global
+
         shot_list = (
             shots_mod.detect_shots(source) if detect_cuts else shots_mod.single_shot(source)
         )
@@ -318,17 +397,26 @@ class Converter:
         if max_frames:
             total = min(total, max_frames) if total else max_frames
 
+        # 6 measured as the plateau on a 16-thread machine: beyond that this
+        # pool contends with OpenCV's own internal threading and throughput
+        # stops improving (8 was marginally slower than 4 in benchmarks).
+        workers = int(cfg.performance.workers) or min(6, (os.cpu_count() or 4))
+        workers = max(1, workers)
+        depth = max(2, workers * 2)
+        log.info("rendering with %d worker thread(s), oversample %.1f",
+                 workers, cfg.performance.oversample)
+
         started = time.perf_counter()
-        with encode.VideoWriter(
+        with ThreadPoolExecutor(workers) as pool, encode.VideoWriter(
             dest,
             out_w,
             out_h,
-            info.fps,
+            writer_fps,
             pix_fmt=cfg.output.pix_fmt,
             codec=cfg.output.codec,
             crf=cfg.output.crf,
             preset=cfg.output.preset,
-            audio_from=source if keep_audio else None,
+            audio_from=source if (keep_audio and out_fps <= 0) else None,
         ) as writer:
             written = 0
             for shot in shot_list:
@@ -348,25 +436,72 @@ class Converter:
                 # frame -- is period-accurate for 8-bit games and also hides
                 # whatever flicker survives Stage 5. Held frames are written
                 # again rather than re-rendered, so it is a speedup too.
-                hold = 1
-                if cfg.temporal.decimate_fps > 0:
-                    hold = max(1, int(round(info.fps / cfg.temporal.decimate_fps)))
+                hold = hold_global
 
                 held: np.ndarray | None = None
+                full_size = (info.width, info.height)
+
+                # Pipelined: the cheap sequential steps stay on this thread and
+                # the expensive per-frame work (tone, abstraction, sampling --
+                # about 95% of the cost) runs on a pool. numpy and OpenCV both
+                # release the GIL, so threads give real parallelism here without
+                # the cost of pickling HD frames to worker processes.
+                #
+                # Grid anchoring is computed here, in order, because it
+                # accumulates camera motion across frames; the resulting offset
+                # is handed to the worker. Everything order-dependent therefore
+                # still happens in order, and the output does not depend on how
+                # many workers are used.
+                inflight: deque = deque()
+
+                def drain_one() -> bool:
+                    nonlocal held, written
+                    idx_f, fut = inflight.popleft()
+                    logical = fut.result()
+                    held = self.finish_frame(
+                        logical, state, offsets[idx_f], full_size, (out_w, out_h)
+                    )
+                    self.stats.frames += 1
+                    for _ in range(holds[idx_f]):
+                        writer.write(held)
+                        written += 1
+                        if progress:
+                            progress(written, total)
+                        if max_frames and written >= max_frames:
+                            return False
+                    return True
+
+                offsets: dict[int, tuple[int, int]] = {}
+                holds: dict[int, int] = {}
+                stop = False
+                rendered = 0
+
                 for i, frame in enumerate(
                     decode.read_frames(source, start=shot.start, count=count)
                 ):
-                    if held is None or i % hold == 0:
-                        held = self.render_frame(
-                            frame, state, frame_index=shot.start + i,
-                            target_size=(out_w, out_h),
-                        )
-                        self.stats.frames += 1
-                    writer.write(held)
-                    written += 1
-                    if progress:
-                        progress(written, total)
-                    if max_frames and written >= max_frames:
+                    if i % hold != 0:
+                        continue          # held frames are written, not rendered
+                    remaining = count - i
+                    holds[rendered] = 1 if duplicate == 1 else min(hold, remaining)
+                    offsets[rendered] = state.temporal.grid_offset(
+                        u8_to_float(self._prescale(frame, size[0]))
+                    )
+                    inflight.append((
+                        rendered,
+                        pool.submit(self.render_logical, frame, size,
+                                    offsets[rendered], shot.start + i),
+                    ))
+                    rendered += 1
+                    # Bounded look-ahead keeps memory flat on long clips.
+                    while len(inflight) >= depth:
+                        if not drain_one():
+                            stop = True
+                            break
+                    if stop:
+                        break
+
+                while inflight and not stop:
+                    if not drain_one():
                         break
 
         self.stats.seconds = time.perf_counter() - started

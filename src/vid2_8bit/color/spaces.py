@@ -15,6 +15,7 @@ Arrays are float32 in [0, 1] for RGB and unbounded float32 for Oklab, shaped
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 
 # Björn Ottosson's Oklab matrices (linear sRGB <-> LMS <-> Oklab).
@@ -61,24 +62,22 @@ def _apply_matrix(arr: np.ndarray, mat: np.ndarray) -> np.ndarray:
 
 
 def srgb_to_linear(srgb: np.ndarray) -> np.ndarray:
-    """sRGB electro-optical transfer function. Input/output in [0, 1]."""
-    srgb = np.asarray(srgb, dtype=np.float32)
-    return np.where(
-        srgb <= 0.04045,
-        srgb / 12.92,
-        np.power((np.maximum(srgb, 0.0) + 0.055) / 1.055, 2.4),
-    ).astype(np.float32)
+    """sRGB electro-optical transfer function. Input/output in [0, 1].
+
+    Uses cv2.pow rather than np.power: it is float32-native and threaded, and
+    profiling put the transfer functions at roughly 70% of total render time.
+    """
+    x = np.ascontiguousarray(srgb, dtype=np.float32)
+    hi = cv2.pow((np.maximum(x, 0.0) + np.float32(0.055)) * np.float32(1.0 / 1.055), 2.4)
+    return np.where(x <= np.float32(0.04045), x * np.float32(1.0 / 12.92), hi)
 
 
 def linear_to_srgb(linear: np.ndarray) -> np.ndarray:
     """Inverse sRGB transfer function. Input/output in [0, 1]."""
-    linear = np.asarray(linear, dtype=np.float32)
-    out = np.where(
-        linear <= 0.0031308,
-        linear * 12.92,
-        1.055 * np.power(np.maximum(linear, 0.0), 1.0 / 2.4) - 0.055,
-    )
-    return np.clip(out, 0.0, 1.0).astype(np.float32)
+    x = np.ascontiguousarray(linear, dtype=np.float32)
+    hi = cv2.pow(np.maximum(x, 0.0), 1.0 / 2.4) * np.float32(1.055) - np.float32(0.055)
+    out = np.where(x <= np.float32(0.0031308), x * np.float32(12.92), hi)
+    return np.clip(out, 0.0, 1.0, out=out)
 
 
 def linear_to_oklab(linear_rgb: np.ndarray) -> np.ndarray:
